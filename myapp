@@ -1,0 +1,29 @@
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name 212.20.151.16.sslip.io;
+
+    client_max_body_size 50m;
+
+    # Специальная обработка для index.html — БЕЗ кеширования
+    location = /index.html {
+        root /var/www/myapp/dist;
+        add_header Cache-Control "no-cache, no-store, must-revalidate, max-age=0";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
+    }
+
+    # Кешировать статику (assets, models, и т.д.)
+    location /assets/ {
+        root /var/www/myapp/dist;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA fallback
+    location / {
+        root /var/www/myapp/dist;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "public, max-age=3600";
+    }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "beauty-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "start": "node server/app.mjs",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.9.4",
+    "@mediapipe/tasks-vision": "^0.10.18",
+    "@stripe/stripe-js": "^5.7.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "framer-motion": "^12.38.0",
+    "jspdf": "^4.2.1",
+    "onnxruntime-web": "^1.14.0",
+    "openai": "^4.104.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.39.3",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "globals": "^17.4.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.6.2",
+    "typescript-eslint": "^8.56.1",
+    "vite": "^6.0.5",
+    "vitest": "^4.1.0"
+  },
+  "serverDependencies": {
+    "express": "^4.21.2",
+    "stripe": "^17.7.0",
+    "cors": "^2.8.5",
+    "@supabase/supabase-js": "^2.49.4"
+  }
+}
