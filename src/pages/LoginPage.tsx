@@ -87,7 +87,13 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-sm text-muted mt-6">
+          <p className="text-center mt-4">
+            <Link to="/forgot-password" className="text-xs text-muted hover:text-charcoal underline transition-colors">
+              Забыли пароль?
+            </Link>
+          </p>
+
+          <p className="text-center text-sm text-muted mt-4">
             Нет аккаунта?{' '}
             <Link to="/register" className="text-charcoal hover:underline font-medium">
               Зарегистрироваться

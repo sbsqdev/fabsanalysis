@@ -11,6 +11,8 @@ import AnalysisPage from './pages/AnalysisPage'
 import AnalysisDetailPage from './pages/AnalysisDetailPage'
 import AnalysisFeaturePage from './pages/AnalysisFeaturePage'
 import SuccessPage from './pages/SuccessPage'
+import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 
 const DevProportionOverlayPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DevProportionOverlayPage'))
@@ -26,6 +28,8 @@ export default function App() {
           <Route path="/landing" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/success" element={<SuccessPage />} />
           <Route
             path="/dashboard"
