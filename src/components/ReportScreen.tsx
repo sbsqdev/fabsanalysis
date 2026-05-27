@@ -5,12 +5,9 @@ import FeatureCard from './FeatureCard';
 import SurveyPanel from './SurveyPanel';
 import KaspiUpload from './KaspiUpload';
 import { downloadPDF } from '../analysis/exportPdf';
-import { lightingLabel } from '../i18n';
-import { useLanguage, useT } from '../lib/language';
-import { localizeNarrativeText } from '../lib/narrativeLocalization';
+import { useLanguage } from '../lib/language';
 import { useAuth } from '../lib/auth';
 
-// ProFace booking URL — update to actual link when available
 const PROFACE_BOOKING_URL = 'https://proface.kz';
 
 interface Props {
@@ -30,6 +27,101 @@ interface Props {
   onSurveyComplete: (profile: UserProfile) => void;
 }
 
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function getStatusMeta(status: string) {
+  const map: Record<string, { emoji: string; label: string; color: string; bar: string; summary: string }> = {
+    strength: {
+      emoji: '✨',
+      label: 'Сильная сторона',
+      color: 'text-emerald-700',
+      bar: 'bg-emerald-400',
+      summary: 'AI нашёл у тебя выраженные сильные стороны. Это здорово — есть с чем работать и что подчеркнуть.',
+    },
+    attention: {
+      emoji: '💡',
+      label: 'Есть потенциал',
+      color: 'text-rose-600',
+      bar: 'bg-rose-400',
+      summary: 'AI видит зоны, которые можно улучшить. Это не недостаток — это возможность выглядеть ещё лучше.',
+    },
+    within_norm: {
+      emoji: '👍',
+      label: 'Всё в норме',
+      color: 'text-blue-600',
+      bar: 'bg-blue-400',
+      summary: 'Показатели в пределах нормы. Всё сбалансировано — это хорошая база для любых процедур.',
+    },
+    insufficient_data: {
+      emoji: '🔍',
+      label: 'Мало данных',
+      color: 'text-gray-500',
+      bar: 'bg-gray-300',
+      summary: 'Качество фото не позволило сделать точный анализ. Попробуй сделать снимок при хорошем освещении.',
+    },
+  };
+  return map[status] ?? map['within_norm'];
+}
+
+function ScoreBar({ value, color }: { value: number; color: string }) {
+  return (
+    <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+      <div
+        className={`h-2 rounded-full transition-all duration-700 ${color}`}
+        style={{ width: `${Math.round(value * 100)}%` }}
+      />
+    </div>
+  );
+}
+
+// ── Locked preview ────────────────────────────────────────────────────────────
+
+function LockedPreview({ status }: { status: string }) {
+  const meta = getStatusMeta(status);
+  return (
+    <div className="relative rounded-2xl border border-gray-100 bg-white overflow-hidden shadow-sm">
+      {/* blurred content */}
+      <div className="p-6 select-none pointer-events-none">
+        <div className="flex items-center gap-3 mb-5">
+          <span className="text-3xl">{meta.emoji}</span>
+          <div>
+            <div className="h-4 bg-gray-200 rounded w-32 blur-sm mb-1" />
+            <div className="h-3 bg-gray-100 rounded w-48 blur-sm" />
+          </div>
+        </div>
+        {[90, 70, 82].map((w, i) => (
+          <div key={i} className="mb-3">
+            <div className="flex justify-between mb-1">
+              <div className="h-3 bg-gray-200 rounded blur-sm" style={{ width: `${w * 0.6}%` }} />
+              <div className="h-3 bg-gray-200 rounded w-8 blur-sm" />
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-2">
+              <div className={`h-2 rounded-full blur-sm ${meta.bar}`} style={{ width: `${w}%` }} />
+            </div>
+          </div>
+        ))}
+        <div className="mt-4 bg-gray-50 rounded-xl p-4 space-y-2">
+          <div className="h-3 bg-gray-200 rounded blur-sm w-full" />
+          <div className="h-3 bg-gray-200 rounded blur-sm w-4/5" />
+          <div className="h-3 bg-gray-200 rounded blur-sm w-3/4" />
+        </div>
+      </div>
+      {/* overlay */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 backdrop-blur-[3px]">
+        <div className="text-center px-6 max-w-xs">
+          <div className="text-4xl mb-3">🔒</div>
+          <p className="font-bold text-gray-900 text-lg mb-2">Анализ готов</p>
+          <p className="text-sm text-gray-500 leading-relaxed">
+            Оплати 3 000 ₸ через Kaspi — загрузи чек ниже и отчёт откроется сразу
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function ReportScreen({
   report,
   frontImageDataUrl,
@@ -44,12 +136,10 @@ export default function ReportScreen({
   userProfile,
   onSurveyComplete,
 }: Props) {
-  const t = useT();
   const { lang } = useLanguage();
   const { hasAccess, refreshAccess } = useAuth();
   const [surveyCompletedInReport, setSurveyCompletedInReport] = useState(false);
-  const [disclaimerOpen, setDisclaimerOpen] = useState(false);
-  const [accuracyOpen, setAccuracyOpen] = useState(false);
+  const [techOpen, setTechOpen] = useState(false);
   const [paymentVerified, setPaymentVerified] = useState(false);
 
   const isLocked = !hasAccess && !paymentVerified;
@@ -59,7 +149,6 @@ export default function ReportScreen({
     setPaymentVerified(true);
   }
 
-  // Only Lips feature
   const lipsFeature = useMemo(
     () => report.features.find((f) => f.name === 'Lips') ?? report.features[0] ?? null,
     [report.features],
@@ -74,223 +163,174 @@ export default function ReportScreen({
     return lipsFeature;
   }, [aiResult, lipsFeature]);
 
-  const statusColor = (status: string) => {
-    if (status === 'strength') return 'bg-emerald-100 text-emerald-700';
-    if (status === 'attention') return 'bg-rose-100 text-rose-700';
-    if (status === 'within_norm') return 'bg-blue-100 text-blue-700';
-    return 'bg-gray-100 text-gray-600';
-  };
-
-  const statusLabel = (status: string) => {
-    const map: Record<string, string> = {
-      strength: lang === 'ru' ? 'Сильная сторона' : 'Strength',
-      attention: lang === 'ru' ? 'Есть потенциал' : 'Has Potential',
-      within_norm: lang === 'ru' ? 'В норме' : 'Within Norm',
-      insufficient_data: lang === 'ru' ? 'Недостаточно данных' : 'Insufficient Data',
-    };
-    return map[status] ?? status;
-  };
-
-  const qualityLabel = (score: number) => {
-    if (score >= 0.7) return lang === 'ru' ? 'Хорошее' : 'Good';
-    if (score >= 0.4) return lang === 'ru' ? 'Среднее' : 'Moderate';
-    return lang === 'ru' ? 'Слабое' : 'Poor';
-  };
-
   if (!lipsFeature || !enhancedLipsFeature) {
     return (
-      <div className="max-w-3xl mx-auto px-4 py-12 text-center text-gray-500">
-        {lang === 'ru' ? 'Данные анализа губ не найдены.' : 'Lip analysis data not found.'}
+      <div className="max-w-xl mx-auto px-4 py-16 text-center text-gray-400">
+        {lang === 'ru' ? 'Данные анализа не найдены.' : 'Analysis data not found.'}
       </div>
     );
   }
 
+  const meta = getStatusMeta(lipsFeature.status);
+  const confidencePct = Math.round(lipsFeature.confidence * 100);
+  const qualityPct = Math.round(report.inputs.qualityScore * 100);
+
+  // AI recommendations as clean bullets
+  const aiRecs: string[] = aiResult?.features.find(
+    (a) => a.name === lipsFeature.name
+  )?.aiRecommendations ?? enhancedLipsFeature.recommendations ?? [];
+
   return (
-    <div className="max-w-3xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
+    <div className="max-w-xl mx-auto px-4 py-6 space-y-5">
 
-      {/* ── Header ── */}
-      <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">{t('report.title')}</h1>
-        <p className="text-sm text-gray-400">
-          {t('report.createdAt')} {new Date(report.meta.date).toLocaleString(t('locale.code'))}
-        </p>
+      {/* ── 1. Emotional hero ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-gray-50 to-white border border-gray-100 shadow-sm px-6 pt-6 pb-5">
+        <p className="text-xs text-gray-400 uppercase tracking-widest mb-3 font-medium">AI-анализ губ</p>
+        <div className="flex items-start gap-4 mb-4">
+          <span className="text-5xl leading-none">{meta.emoji}</span>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 leading-tight mb-1">{meta.label}</h1>
+            <p className="text-sm text-gray-500 leading-relaxed">{meta.summary}</p>
+          </div>
+        </div>
+
+        {/* Score bars */}
+        <div className="space-y-3 mt-4">
+          <div>
+            <div className="flex justify-between text-xs text-gray-500 mb-1">
+              <span>Точность анализа</span>
+              <span className="font-semibold text-gray-700">{confidencePct}%</span>
+            </div>
+            <ScoreBar value={lipsFeature.confidence} color={meta.bar} />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-gray-500 mb-1">
+              <span>Качество фото</span>
+              <span className="font-semibold text-gray-700">{qualityPct}%</span>
+            </div>
+            <ScoreBar value={report.inputs.qualityScore} color="bg-gray-300" />
+          </div>
+        </div>
       </div>
 
-      {/* ── Quick-stats strip ── */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium ${statusColor(lipsFeature.status)}`}>
-          <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-          {statusLabel(lipsFeature.status)}
-        </span>
-        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-gray-100 text-gray-600">
-          {t('report.confidenceLabel')}: {Math.round(lipsFeature.confidence * 100)}%
-        </span>
-        {isLocked ? (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-amber-100 text-amber-700">
-            🔒 Требуется оплата
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-gray-100 text-gray-600">
-            {t('report.qualityLabel')}: {qualityLabel(report.inputs.qualityScore)}
-          </span>
-        )}
-      </div>
-
-      {/* ── Lips Feature Card — locked preview or full ── */}
+      {/* ── 2. Locked or full report ── */}
       {isLocked ? (
-        <LockedPreview statusColor={statusColor(lipsFeature.status)} statusLabel={statusLabel(lipsFeature.status)} />
-      ) : (
-        <FeatureCard
-          feature={enhancedLipsFeature}
-          index={0}
-          aiResult={aiResult?.features.find((a) => a.name === enhancedLipsFeature.name)}
-          frontImageDataUrl={frontImageDataUrl}
-          landmarks={landmarks}
-          profileImageDataUrls={profileImageDataUrls}
-          profileMaskDataUrls={profileMaskDataUrls}
-          profileLandmarks={profileLandmarks}
-          profileLandmarkSource={profileLandmarkSource}
-          profileLandmarkConfidence={profileLandmarkConfidence}
-          precomputedTransformDataUrl={precomputedTransforms[enhancedLipsFeature.name] ?? null}
-          gender={userProfile?.gender}
-          population={userProfile?.population ?? 'default'}
-          defaultExpanded
-        />
-      )}
-
-      {/* ── Kaspi payment gate (when locked) ── */}
-      {isLocked && (
-        <div className="mt-6 mb-6">
+        <>
+          <LockedPreview status={lipsFeature.status} />
           <KaspiUpload onVerified={handlePaymentVerified} />
-        </div>
-      )}
-
-      {/* ── Profile completion card ── */}
-      {!userProfile && !surveyCompletedInReport && (
-        <div className="mb-6 mt-6 border-2 border-dashed border-amber-300 rounded-2xl overflow-hidden">
-          <div className="flex items-center gap-3 bg-amber-50 px-5 py-3.5 border-b border-amber-200">
-            <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-amber-800 font-sans">{t('report.profileTitle')}</p>
-              <p className="text-xs text-amber-600 font-sans mt-0.5">{t('report.profileHint')}</p>
-            </div>
-          </div>
-          <div className="p-5 bg-white">
-            <SurveyPanel
-              context="report"
-              onComplete={(profile) => {
-                onSurveyComplete(profile);
-                setSurveyCompletedInReport(true);
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── ProFace Booking CTA ── */}
-      {!isLocked && (
-        <div className="mt-8 mb-6 rounded-2xl overflow-hidden bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-100">
-          <div className="px-6 py-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-rose-500 text-lg">💋</span>
-                <h3 className="font-semibold text-gray-900 text-base">{t('report.bookingTitle')}</h3>
-              </div>
-              <p className="text-sm text-gray-600 leading-relaxed mb-1">
-                {t('report.bookingSubtitle')}
+        </>
+      ) : (
+        <>
+          {/* AI key takeaways — shown before full card */}
+          {aiRecs.length > 0 && (
+            <div className="rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-5">
+              <p className="text-xs text-gray-400 uppercase tracking-widest font-medium mb-4">
+                💬 Что это значит для тебя
               </p>
-              <p className="text-xs text-gray-400">{t('report.bookingNote')}</p>
+              <ul className="space-y-3">
+                {aiRecs.slice(0, 4).map((rec, i) => (
+                  <li key={i} className="flex gap-3 text-sm text-gray-700 leading-relaxed">
+                    <span className="mt-0.5 w-5 h-5 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center flex-shrink-0 text-xs font-bold">{i + 1}</span>
+                    <span>{rec}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <a
-              href={PROFACE_BOOKING_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-shrink-0 inline-flex items-center gap-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold px-5 py-3 rounded-xl transition-colors shadow-sm"
-            >
-              {t('report.bookingCta')}
-            </a>
+          )}
+
+          {/* Full FeatureCard — detailed measurements */}
+          <FeatureCard
+            feature={enhancedLipsFeature}
+            index={0}
+            aiResult={aiResult?.features.find((a) => a.name === enhancedLipsFeature.name)}
+            frontImageDataUrl={frontImageDataUrl}
+            landmarks={landmarks}
+            profileImageDataUrls={profileImageDataUrls}
+            profileMaskDataUrls={profileMaskDataUrls}
+            profileLandmarks={profileLandmarks}
+            profileLandmarkSource={profileLandmarkSource}
+            profileLandmarkConfidence={profileLandmarkConfidence}
+            precomputedTransformDataUrl={precomputedTransforms[enhancedLipsFeature.name] ?? null}
+            gender={userProfile?.gender}
+            population={userProfile?.population ?? 'default'}
+            defaultExpanded
+          />
+
+          {/* ── ProFace CTA ── */}
+          <div className="rounded-2xl overflow-hidden bg-gradient-to-br from-rose-500 to-rose-600 text-white shadow-md">
+            <div className="px-6 py-6">
+              <p className="text-rose-200 text-xs font-semibold uppercase tracking-widest mb-2">Следующий шаг</p>
+              <h3 className="text-xl font-bold mb-2 leading-tight">
+                Хочешь увидеть результат ещё до процедуры?
+              </h3>
+              <p className="text-rose-100 text-sm leading-relaxed mb-5">
+                Специалисты ProFace посмотрят твой анализ и покажут, как будут выглядеть губы после коррекции — без догадок и сюрпризов.
+              </p>
+              <a
+                href={PROFACE_BOOKING_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 bg-white text-rose-600 font-bold px-5 py-3 rounded-xl text-sm hover:bg-rose-50 transition-colors shadow-sm"
+              >
+                Записаться в ProFace
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                </svg>
+              </a>
+            </div>
           </div>
-        </div>
-      )}
 
-      {/* ── Collapsible Disclaimer ── */}
-      {!isLocked && (
-        <div className="mb-3">
-          <button
-            onClick={() => setDisclaimerOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            <span className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {t('report.disclaimerToggle')}
-            </span>
-            <svg
-              className={`w-4 h-4 transition-transform ${disclaimerOpen ? 'rotate-180' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {disclaimerOpen && (
-            <div className="mt-1 px-4 py-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700 leading-relaxed">
-              {localizeNarrativeText(report.disclaimer, lang)}
+          {/* ── Survey ── */}
+          {!userProfile && !surveyCompletedInReport && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 overflow-hidden">
+              <div className="px-5 py-4 border-b border-amber-200 flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">Уточни данные — получи точнее</p>
+                  <p className="text-xs text-amber-600 mt-0.5">Пол и популяция влияют на нормы анализа</p>
+                </div>
+              </div>
+              <div className="p-5 bg-white">
+                <SurveyPanel
+                  context="report"
+                  onComplete={(profile) => {
+                    onSurveyComplete(profile);
+                    setSurveyCompletedInReport(true);
+                  }}
+                />
+              </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* ── Collapsible Data Accuracy ── */}
-      {!isLocked && (
-        <div className="mb-6">
-          <button
-            onClick={() => setAccuracyOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            <span className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              {t('report.dataAccuracyToggle')}
-            </span>
-            <svg
-              className={`w-4 h-4 transition-transform ${accuracyOpen ? 'rotate-180' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          {/* ── Technical details (collapsed) ── */}
+          <div>
+            <button
+              onClick={() => setTechOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-100 rounded-xl text-sm text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {accuracyOpen && (
-            <div className="mt-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <SummaryCard
-                label={t('report.quality')}
-                value={`${Math.round(report.inputs.qualityScore * 100)}%`}
-                sub={`${lightingLabel(report.inputs.lightingHeuristic)} ${t('report.lighting')}`}
-              />
-              <SummaryCard
-                label={t('report.faceAccuracy')}
-                value={`${Math.round(report.faceDetection.confidence * 100)}%`}
-                sub={`${report.landmarks.count} ${t('report.points')}`}
-              />
-              <SummaryCard
-                label={t('report.avgAccuracy')}
-                value={`${Math.round(lipsFeature.confidence * 100)}%`}
-                sub={t('report.byFeatures')}
-              />
-              <SummaryCard
-                label={t('report.processing')}
-                value={`${report.meta.processingTime}ms`}
-                sub={report.meta.device}
-              />
-            </div>
-          )}
-        </div>
-      )}
+              <span>Технические детали анализа</span>
+              <svg className={`w-4 h-4 transition-transform ${techOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {techOpen && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Точность', value: `${confidencePct}%` },
+                  { label: 'Качество фото', value: `${qualityPct}%` },
+                  { label: 'Точки лица', value: `${report.landmarks.count}` },
+                  { label: 'Обработка', value: `${report.meta.processingTime}мс` },
+                ].map(({ label, value }) => (
+                  <div key={label} className="bg-white border border-gray-100 rounded-xl p-3">
+                    <div className="text-xs text-gray-400 mb-0.5">{label}</div>
+                    <div className="text-base font-bold text-gray-800">{value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-      {/* ── PDF Export ── */}
-      {!isLocked && (
-        <div className="flex gap-2.5">
+          {/* ── PDF ── */}
           <button
             onClick={() => downloadPDF({
               report: { ...report, features: enhancedLipsFeature ? [enhancedLipsFeature] : [] },
@@ -298,87 +338,15 @@ export default function ReportScreen({
               profileImageDataUrls,
               aiResult,
             })}
-            className="flex-1 flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+            className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-sm font-medium text-gray-500"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
-            {t('report.downloadPdf')}
+            Скачать PDF-отчёт
           </button>
-        </div>
+        </>
       )}
-    </div>
-  );
-}
-
-
-// ── Locked preview shown before Kaspi payment ────────────────────────────────
-function LockedPreview({ statusColor, statusLabel }: { statusColor: string; statusLabel: string }) {
-  const mockParams = [
-    { label: 'Симметрия контура', hint: 'точное значение скрыто' },
-    { label: 'Соотношение верх / низ', hint: 'точное значение скрыто' },
-    { label: 'Лук Купидона', hint: 'точное значение скрыто' },
-    { label: 'Проекция и объём', hint: 'точное значение скрыто' },
-    { label: 'Уголки губ', hint: 'точное значение скрыто' },
-    { label: 'Ширина', hint: 'точное значение скрыто' },
-  ];
-
-  return (
-    <div className="relative rounded-2xl border border-gray-200 bg-white overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-        <div className="flex items-center gap-2">
-          <span className="text-base font-semibold text-gray-900">Губы</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor}`}>{statusLabel}</span>
-        </div>
-        <span className="text-xs text-amber-600 font-medium bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
-          🔒 Требует оплаты
-        </span>
-      </div>
-
-      {/* Blurred parameter list */}
-      <div className="p-5 space-y-3">
-        <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-4">Ключевые параметры</p>
-        {mockParams.map((p) => (
-          <div key={p.label} className="flex items-center justify-between py-2 border-b border-gray-50">
-            <span className="text-sm text-gray-700">{p.label}</span>
-            <span className="text-sm font-semibold text-gray-300 blur-sm select-none">██████</span>
-          </div>
-        ))}
-      </div>
-
-      {/* AI insight blurred */}
-      <div className="px-5 pb-5">
-        <div className="bg-gray-50 rounded-xl p-4">
-          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-2">AI-заключение</p>
-          <div className="space-y-1.5">
-            <div className="h-3 bg-gray-200 rounded blur-sm" style={{ width: '90%' }} />
-            <div className="h-3 bg-gray-200 rounded blur-sm" style={{ width: '75%' }} />
-            <div className="h-3 bg-gray-200 rounded blur-sm" style={{ width: '82%' }} />
-          </div>
-        </div>
-      </div>
-
-      {/* Overlay prompt */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/60 backdrop-blur-[2px]">
-        <div className="text-center px-6 py-8 max-w-xs">
-          <div className="text-3xl mb-3">🔒</div>
-          <p className="font-semibold text-gray-900 text-base mb-1">Анализ готов</p>
-          <p className="text-sm text-gray-500 mb-4">
-            Оплатите 3 000 ₸ через Kaspi и загрузите чек ниже — отчёт откроется сразу
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SummaryCard({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl p-3 sm:p-4">
-      <div className="text-[10px] sm:text-xs text-gray-400 uppercase tracking-wide mb-0.5 sm:mb-1">{label}</div>
-      <div className="text-lg sm:text-xl font-bold text-gray-900">{value}</div>
-      <div className="text-[10px] sm:text-xs text-gray-500 mt-0.5">{sub}</div>
     </div>
   );
 }
