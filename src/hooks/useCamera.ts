@@ -18,8 +18,9 @@ export interface UseCameraOptions {
 
 const DEFAULT_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   facingMode: 'user',
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
+  width:  { ideal: 1920, min: 720 },
+  height: { ideal: 1080, min: 480 },
+  frameRate: { ideal: 30 },
 };
 
 export function useCamera(options: UseCameraOptions = {}) {

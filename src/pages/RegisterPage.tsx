@@ -4,6 +4,7 @@ import { useAuth } from '../lib/auth'
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
@@ -20,6 +21,11 @@ export default function RegisterPage() {
       setError('Введите корректный email-адрес.')
       return
     }
+    const digits = phone.replace(/\D/g, '')
+    if (phone.trim() && (digits.length < 10 || digits.length > 12)) {
+      setError('Введите корректный номер телефона.')
+      return
+    }
     if (password.length < 6) {
       setError('Пароль должен быть минимум 6 символов.')
       return
@@ -29,8 +35,9 @@ export default function RegisterPage() {
       return
     }
 
+    const cleanPhone = phone.trim() ? `+${digits.replace(/^8/, '7')}` : undefined
     setLoading(true)
-    const { error: err, needsEmailConfirmation } = await signUp(email.trim().toLowerCase(), password)
+    const { error: err, needsEmailConfirmation } = await signUp(email.trim().toLowerCase(), password, cleanPhone)
 
     if (err) {
       const msg = err.message?.toLowerCase() ?? ''
@@ -72,7 +79,7 @@ export default function RegisterPage() {
           </button>
           <button
             className="text-xs text-muted underline"
-            onClick={() => { setNeedsConfirm(false); setEmail(''); setPassword(''); setConfirm('') }}
+            onClick={() => { setNeedsConfirm(false); setEmail(''); setPhone(''); setPassword(''); setConfirm('') }}
           >
             Зарегистрировать другой email
           </button>
@@ -109,6 +116,26 @@ export default function RegisterPage() {
                 className="w-full border border-cream-dark rounded-xl px-4 py-3 text-sm text-charcoal bg-cream focus:outline-none focus:border-charcoal/40 transition-colors"
                 placeholder="you@example.com"
               />
+            </div>
+
+            {/* Phone */}
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1.5">
+                Номер телефона
+                <span className="ml-1 text-muted/60 font-normal">(для записи в ProFace)</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-muted select-none">📞</span>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  autoComplete="tel"
+                  className="w-full border border-cream-dark rounded-xl pl-9 pr-4 py-3 text-sm text-charcoal bg-cream focus:outline-none focus:border-charcoal/40 transition-colors"
+                  placeholder="+7 701 000 00 00"
+                />
+              </div>
+              <p className="text-[10px] text-muted/60 mt-1 pl-1">Необязательно — поможет специалисту связаться с вами</p>
             </div>
 
             {/* Password */}

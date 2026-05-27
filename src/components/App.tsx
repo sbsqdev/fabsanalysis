@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import type { AppScreen, NormalizedLandmark, AnalysisReport, AngleCapture, FeatureAnalysis, UserProfile } from '../types';
 import { useAuth } from '../lib/auth';
 import { saveAnalysisForUser } from '../lib/analysisStore';
@@ -24,7 +24,9 @@ import CaptureScreen from './CaptureScreen';
 import GuidedCaptureScreen from './GuidedCaptureScreen';
 import ScanningScreen from './ScanningScreen';
 import type { ProfileScanResult } from './ScanningScreen';
-import ReportScreen from './ReportScreen';
+// ReportScreen is heavy (AI, PDF, FAL visualizations) — lazy load so it doesn't
+// block the initial bundle. It only renders after scanning is 100% done anyway.
+const ReportScreen = lazy(() => import('./ReportScreen'));
 
 export default function App() {
   const tApp = (key: string) => {
@@ -403,6 +405,27 @@ export default function App() {
     setScreen('capture');
   }, []);
 
+  /** User explicitly cancelled/wants to retake — reset all state and go back to capture */
+  const handleRetake = useCallback(() => {
+    setCapturedCanvas(null);
+    setFrontImageDataUrl(null);
+    setProfileImageDataUrls({});
+    setProfileMaskDataUrls({});
+    setProfileLandmarks({});
+    setProfileLandmarkSource({});
+    setProfileLandmarkConfidence({});
+    setAnalysisLandmarks(null);
+    setReport(null);
+    setScanError(null);
+    setProfileCaptures([]);
+    setAiStatus('idle');
+    setAiResult(null);
+    setAiError(null);
+    setPrecomputedTransforms({});
+    setUserProfile(null);
+    setScreen('capture');
+  }, []);
+
   /** Fire-and-forget: save completed analysis via Supabase client. Silently ignored if not authenticated. */
   const saveAnalysis = useCallback(async (
     completedReport: AnalysisReport,
@@ -471,6 +494,7 @@ export default function App() {
           onScanComplete={handleScanComplete}
           onScanFailed={handleScanFailed}
           onSurveyChange={setUserProfile}
+          onRetake={handleRetake}
           faceMeshDetect={faceMesh.detect}
           faceMeshReady={faceMesh.isReady}
           faceMeshInitialize={faceMesh.initialize}
@@ -481,22 +505,25 @@ export default function App() {
       )}
 
       {screen === 'report' && report && (
-        <ReportScreen
-          report={report}
-          frontImageDataUrl={frontImageDataUrl}
-          profileImageDataUrls={profileImageDataUrls}
-          profileMaskDataUrls={profileMaskDataUrls}
-          profileLandmarks={profileLandmarks}
-          profileLandmarkSource={profileLandmarkSource}
-          profileLandmarkConfidence={profileLandmarkConfidence}
-          landmarks={analysisLandmarks}
-          precomputedTransforms={precomputedTransforms}
-          aiStatus={aiStatus}
-          aiResult={aiResult}
-          aiError={aiError}
-          userProfile={userProfile}
-          onSurveyComplete={setUserProfile}
-        />
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>}>
+          <ReportScreen
+            report={report}
+            frontImageDataUrl={frontImageDataUrl}
+            profileImageDataUrls={profileImageDataUrls}
+            profileMaskDataUrls={profileMaskDataUrls}
+            profileLandmarks={profileLandmarks}
+            profileLandmarkSource={profileLandmarkSource}
+            profileLandmarkConfidence={profileLandmarkConfidence}
+            landmarks={analysisLandmarks}
+            precomputedTransforms={precomputedTransforms}
+            aiStatus={aiStatus}
+            aiResult={aiResult}
+            aiError={aiError}
+            userProfile={userProfile}
+            onSurveyComplete={setUserProfile}
+            onRetake={handleRetake}
+          />
+        </Suspense>
       )}
     </div>
   );

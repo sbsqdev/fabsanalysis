@@ -46,6 +46,8 @@ interface Props {
   faceMeshLoading: boolean;
   faceMeshError: string | null;
   faceMeshDelegate: 'GPU' | 'CPU' | null;
+  /** Called when user taps "upload different photo" — cancels scan and returns to capture */
+  onRetake?: () => void;
 }
 
 type Phase =
@@ -131,6 +133,7 @@ export default function ScanningScreen({
   onScanComplete,
   onScanFailed,
   onSurveyChange,
+  onRetake,
   faceMeshDetect,
   faceMeshReady,
   faceMeshInitialize,
@@ -621,23 +624,72 @@ export default function ScanningScreen({
     return offscreen.toDataURL();
   }
 
+  /**
+   * Renders the SAM segmentation mask as an aesthetic glowing overlay:
+   *   • violet-300 → indigo-400 gradient top-to-bottom
+   *   • natural edge glow: blurring a filled shape concentrates light at the boundary
+   *   • very subtle interior tint so the face is still clearly visible
+   *
+   * The returned PNG is meant to be displayed with mix-blend-mode:screen so the
+   * dark/transparent interior disappears and the bright edge adds a neon aura.
+   */
   function renderMaskToDataUrl(mask: Uint8Array, w: number, h: number): string {
-    const offscreen = document.createElement('canvas');
-    offscreen.width = w;
-    offscreen.height = h;
-    const ctx = offscreen.getContext('2d')!;
-    const img = ctx.createImageData(w, h);
-    const d = img.data;
+    // ── Step 1: rasterise binary mask into a white opaque shape ──────────────
+    const shape = document.createElement('canvas');
+    shape.width = w; shape.height = h;
+    const sCtx = shape.getContext('2d')!;
+    const imgData = sCtx.createImageData(w, h);
+    const md = imgData.data;
     for (let i = 0; i < mask.length; i++) {
       if (!mask[i]) continue;
       const p = i * 4;
-      d[p] = 34;      // R
-      d[p + 1] = 197; // G
-      d[p + 2] = 94;  // B
-      d[p + 3] = 120; // alpha
+      md[p] = md[p + 1] = md[p + 2] = md[p + 3] = 255;
     }
-    ctx.putImageData(img, 0, 0);
-    return offscreen.toDataURL('image/png');
+    sCtx.putImageData(imgData, 0, 0);
+
+    // ── Step 2: create gradient-coloured version of the mask ─────────────────
+    //    violet-300 (#c4b5fd) at top → indigo-400 (#818cf8) at bottom
+    const colored = document.createElement('canvas');
+    colored.width = w; colored.height = h;
+    const cCtx = colored.getContext('2d')!;
+    const grad = cCtx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0,    '#e9d5ff'); // violet-200 — brighter top edge
+    grad.addColorStop(0.35, '#c4b5fd'); // violet-300
+    grad.addColorStop(0.7,  '#a78bfa'); // violet-400
+    grad.addColorStop(1,    '#818cf8'); // indigo-400
+    cCtx.fillStyle = grad;
+    cCtx.fillRect(0, 0, w, h);
+    // Clip gradient to mask shape
+    cCtx.globalCompositeOperation = 'destination-in';
+    cCtx.drawImage(shape, 0, 0);
+
+    // ── Step 3: composite — blurred layers create natural edge glow ──────────
+    //    Blurring a filled shape produces a corona that is brightest at the edge.
+    //    Two blur passes (wide + tight) give a rich depth to the glow.
+    const out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    const ctx = out.getContext('2d')!;
+
+    // Scale glow radius to image size so it renders correctly at any display scale
+    const glow = Math.max(20, Math.round(w / 22));
+
+    // Wide outer glow
+    ctx.filter = `blur(${glow}px)`;
+    ctx.globalAlpha = 0.70;
+    ctx.drawImage(colored, 0, 0);
+
+    // Tight inner glow (sharper edge highlight)
+    ctx.filter = `blur(${Math.round(glow * 0.35)}px)`;
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(colored, 0, 0);
+
+    // Near-invisible interior tint — just enough to show face region
+    ctx.filter = 'none';
+    ctx.globalAlpha = 0.07;
+    ctx.drawImage(colored, 0, 0);
+
+    ctx.globalAlpha = 1;
+    return out.toDataURL('image/png');
   }
 
   const phaseLabels: Record<Phase, string> = {
@@ -652,34 +704,146 @@ export default function ScanningScreen({
     error: t('scanning.phase.error'),
   };
 
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] px-4">
-      <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">
-        {t('scanning.title')}
-      </h2>
+  // ── Phase stepper helpers ───────────────────────────────────────────────────
+  const phaseToGroup = (p: Phase): string => {
+    if (p === 'loading_model') return 'init';
+    if (p === 'detecting_front' || p === 'drawing') return 'scan';
+    if (p === 'detecting_left' || p === 'detecting_right') return 'profile';
+    return 'ai'; // waiting_survey | ai_enhancing | done | error
+  };
+  const groupOrder = hasProfiles
+    ? ['init', 'scan', 'profile', 'ai']
+    : ['init', 'scan', 'ai'];
+  const currentGroup = phaseToGroup(phase);
+  const currentGroupIdx = groupOrder.indexOf(currentGroup);
+  const groupMeta: Record<string, { icon: string; label: string }> = {
+    init:    { icon: '⚙️', label: 'Загрузка' },
+    scan:    { icon: '🔍', label: 'Скан' },
+    profile: { icon: '📐', label: 'Профили' },
+    ai:      { icon: '✨', label: 'ИИ-анализ' },
+  };
 
-      {/* Image + Overlay */}
-      <div className="relative mb-3 rounded-2xl overflow-hidden shadow-lg border border-gray-200" style={{ height: '50vh' }}>
+  return (
+    <div className="flex flex-col items-center justify-start min-h-[90vh] px-4 pt-4 pb-6">
+
+      {/* ── Phase stepper ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-1.5 mb-5 justify-center w-full">
+        {groupOrder.map((gId, gi) => {
+          const meta = groupMeta[gId];
+          const isDone = currentGroupIdx > gi;
+          const isActive = currentGroupIdx === gi;
+          return (
+            <div key={gId} className="flex items-center">
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-300 ${
+                isDone
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : isActive
+                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                    : 'bg-gray-100 text-gray-400'
+              }`}>
+                <span>{isDone ? '✓' : meta.icon}</span>
+                <span className="hidden sm:inline">{meta.label}</span>
+              </div>
+              {gi < groupOrder.length - 1 && (
+                <div className={`w-4 h-px mx-1 transition-colors duration-300 ${isDone ? 'bg-emerald-300' : 'bg-gray-200'}`} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Main scan area ────────────────────────────────────────── */}
+      <div
+        className="relative w-full max-w-sm rounded-3xl overflow-hidden mb-4"
+        style={{
+          height: '58vh',
+          boxShadow: phase === 'done'
+            ? '0 0 0 2px rgba(52,211,153,0.4), 0 8px 40px rgba(0,0,0,0.15)'
+            : phase === 'error'
+              ? '0 0 0 2px rgba(239,68,68,0.3), 0 8px 40px rgba(0,0,0,0.12)'
+              : '0 0 0 1.5px rgba(99,102,241,0.25), 0 8px 40px rgba(0,0,0,0.12)',
+        }}
+      >
+        {/* Face image */}
         <img
           src={canvas.toDataURL()}
           alt={t('scanning.capturedAlt')}
-          className="w-full h-full object-cover object-center block"
-        />
-        <canvas
-          ref={overlayRef}
-          className={`absolute top-0 left-0 w-full h-full ${phase !== 'done' ? 'animate-hue-shift' : ''}`}
-          style={{ pointerEvents: 'none', objectFit: 'cover', objectPosition: 'center' }}
+          className="absolute inset-0 w-full h-full object-cover object-center block"
         />
 
-        {/* Scan line animation */}
+        {/* Subtle vignette while scanning */}
+        {phase !== 'done' && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ background: 'radial-gradient(ellipse at 50% 38%, transparent 28%, rgba(0,0,0,0.22) 100%)' }}
+          />
+        )}
+
+        {/* Landmark overlay canvas */}
+        <canvas
+          ref={overlayRef}
+          className={`absolute inset-0 w-full h-full ${phase !== 'done' ? 'animate-hue-shift' : ''}`}
+          style={{ pointerEvents: 'none' }}
+        />
+
+        {/* Glowing scan line */}
         {(phase === 'detecting_front' || phase === 'loading_model' || phase === 'ai_enhancing') && (
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            <div className="absolute left-0 right-0 h-0.5 bg-brand-400 opacity-60 animate-scan" />
+            <div
+              className="absolute left-0 right-0 h-px animate-scan"
+              style={{
+                background:
+                  'linear-gradient(90deg, transparent, rgba(99,102,241,0) 5%, rgba(99,102,241,0.9) 35%, rgba(168,85,247,1) 50%, rgba(99,102,241,0.9) 65%, rgba(99,102,241,0) 95%, transparent)',
+                boxShadow: '0 0 14px 5px rgba(99,102,241,0.5), 0 0 1px rgba(255,255,255,0.6)',
+              }}
+            />
+          </div>
+        )}
+
+        {/* HUD corner brackets */}
+        {(['top-3 left-3 border-t-2 border-l-2', 'top-3 right-3 border-t-2 border-r-2', 'bottom-3 left-3 border-b-2 border-l-2', 'bottom-3 right-3 border-b-2 border-r-2']).map((cls, i) => (
+          <div
+            key={i}
+            className={`absolute w-7 h-7 pointer-events-none transition-colors duration-500 ${cls} ${
+              phase === 'done' ? 'border-emerald-400/70' : phase === 'error' ? 'border-red-400/60' : 'border-indigo-400/55'
+            }`}
+          />
+        ))}
+
+        {/* Live status badge */}
+        {phase !== 'done' && phase !== 'error' && (
+          <div className="absolute top-3.5 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+            <div className="flex items-center gap-1.5 bg-black/55 backdrop-blur-md rounded-full px-3 py-1.5 border border-white/10">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse flex-shrink-0" />
+              <span className="text-white/90 text-[11px] font-semibold tracking-wide whitespace-nowrap">
+                {phaseLabels[phase]}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Done overlay */}
+        {phase === 'done' && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div
+              className="w-20 h-20 rounded-full flex items-center justify-center"
+              style={{
+                background: 'rgba(16,185,129,0.18)',
+                border: '2px solid rgba(52,211,153,0.75)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                boxShadow: '0 0 30px rgba(16,185,129,0.4)',
+              }}
+            >
+              <svg className="w-10 h-10 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Profile thumbnails during profile scan */}
+      {/* ── Profile thumbnails during profile scan ─────────────────── */}
       {hasProfiles && (phase === 'detecting_left' || phase === 'detecting_right' || phase === 'done') && (
         <div className="flex gap-3 mb-4">
           {profileCaptures!.filter((c) => c.angle !== 'front').map((c) => {
@@ -691,9 +855,9 @@ export default function ScanningScreen({
             return (
               <div
                 key={c.angle}
-                className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-xl overflow-hidden border-2 transition-colors ${
+                className={`relative w-24 h-28 sm:w-28 sm:h-32 rounded-2xl overflow-hidden border-2 transition-all duration-300 ${
                   isActive
-                    ? 'border-brand-400'
+                    ? 'border-indigo-400 shadow-lg shadow-indigo-100/60'
                     : phase === 'done'
                       ? 'border-emerald-300'
                       : 'border-gray-200'
@@ -701,54 +865,50 @@ export default function ScanningScreen({
               >
                 <img src={c.canvas.toDataURL()} alt={c.angle} className="w-full h-full object-cover" />
 
-                {/* MobileSAM mask overlay */}
                 {maskUrl && (
                   <img
                     src={maskUrl}
                     alt=""
                     aria-hidden
                     className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                    style={{ mixBlendMode: 'screen' }}
                   />
                 )}
-
-                {/* Contour overlay — stable img so it survives re-renders */}
                 {contourUrl && (
-                  <img
-                    src={contourUrl}
-                    alt=""
-                    aria-hidden
-                    className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                  />
+                  <img src={contourUrl} alt="" aria-hidden className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
                 )}
 
-                {/* Scanning pulse while mask not yet ready */}
                 {isActive && !maskUrl && (
                   <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                    <div className="absolute left-0 right-0 h-0.5 bg-brand-400 opacity-70 animate-scan" />
+                    <div
+                      className="absolute left-0 right-0 h-px animate-scan"
+                      style={{
+                        background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.9), transparent)',
+                        boxShadow: '0 0 8px rgba(99,102,241,0.5)',
+                      }}
+                    />
                   </div>
                 )}
 
-                {/* "Mask" badge */}
                 {maskUrl && phase !== 'done' && (
                   <div className="absolute top-1 left-1">
-                    <span className="bg-emerald-600/85 text-white text-[9px] font-medium px-1.5 py-0.5 rounded-full leading-tight">
+                    <span className="bg-indigo-600/80 text-white text-[8px] font-semibold px-1.5 py-0.5 rounded-full leading-tight">
                       {t('scanning.mask')}
                     </span>
                   </div>
                 )}
 
-                {/* "Contour" badge */}
                 {contourUrl && phase !== 'done' && (
                   <div className="absolute bottom-1 left-1 right-1 flex justify-center">
-                    <span className="bg-black/50 text-white text-[9px] font-medium px-1.5 py-0.5 rounded-full leading-tight">
+                    <span className="bg-black/50 text-white text-[8px] font-medium px-1.5 py-0.5 rounded-full leading-tight">
                       {t('scanning.contour')}
                     </span>
                   </div>
                 )}
 
                 {phase === 'done' && (
-                  <div className="absolute inset-0 bg-emerald-500/10 flex items-end justify-center pb-1">
-                    <svg className="w-5 h-5 text-emerald-500 drop-shadow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <div className="absolute inset-0 bg-emerald-500/10 flex items-end justify-center pb-1.5">
+                    <svg className="w-4 h-4 text-emerald-500 drop-shadow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   </div>
@@ -759,61 +919,60 @@ export default function ScanningScreen({
         </div>
       )}
 
-      {/* Survey modal — floats over scanning screen */}
+      {/* ── Survey modal ──────────────────────────────────────────── */}
       {phase === 'waiting_survey' && !surveyDone && onSurveyChange && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden">
-            {/* Backdrop */}
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            {/* Panel */}
-            <div className="relative w-full max-w-lg mx-3 mb-3 sm:mb-0 bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
-              <div className="px-5 pt-5 pb-1">
-                <p className="text-sm text-gray-500 text-center mb-1">{t('scanning.surveyHint')}</p>
-              </div>
-              <div className="px-5 pb-5">
-                <SurveyPanel
-                  onComplete={(profile) => {
-                    onSurveyChange(profile);
-                    surveyDoneRef.current = true;
-                    setSurveyDone(true);
-                    surveyResolveRef.current?.();
-                    surveyResolveRef.current = null;
-                  }}
-                />
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div className="relative w-full max-w-lg mx-3 mb-3 sm:mb-0 bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+            <div className="px-5 pt-5 pb-1">
+              <p className="text-sm text-gray-500 text-center mb-1">{t('scanning.surveyHint')}</p>
+            </div>
+            <div className="px-5 pb-5">
+              <SurveyPanel
+                onComplete={(profile) => {
+                  onSurveyChange(profile);
+                  surveyDoneRef.current = true;
+                  setSurveyDone(true);
+                  surveyResolveRef.current?.();
+                  surveyResolveRef.current = null;
+                }}
+              />
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-      {/* Progress */}
-      <div className="w-full max-w-lg mt-3 mb-2">
-        <div className="flex justify-between text-sm mb-2">
-          <TextShimmer duration={2.2} spread={3} className="text-sm font-medium">
+      {/* ── Progress bar ──────────────────────────────────────────── */}
+      <div className="w-full max-w-sm mt-1 mb-2">
+        <div className="flex justify-between items-center mb-2">
+          <TextShimmer duration={2.2} spread={3} className="text-sm font-semibold text-gray-800">
             {phaseLabels[phase]}
           </TextShimmer>
-          <span className="text-gray-400">{progress}%</span>
+          <span className="text-xs font-mono text-gray-400 tabular-nums">{progress}%</span>
         </div>
-        <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+        <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
           <div
-            className="h-2 rounded-full transition-all duration-500 ease-out relative overflow-hidden"
+            className="h-1.5 rounded-full transition-all duration-500 ease-out"
             style={{
               width: `${progress}%`,
-              background: 'linear-gradient(90deg, #6366f1, #818cf8)',
+              background: phase === 'done'
+                ? 'linear-gradient(90deg, #10b981, #34d399)'
+                : phase === 'error'
+                  ? '#ef4444'
+                  : 'linear-gradient(90deg, #6366f1, #a855f7)',
+              boxShadow: phase === 'done'
+                ? '0 0 8px rgba(16,185,129,0.5)'
+                : phase !== 'error'
+                  ? '0 0 10px rgba(99,102,241,0.5)'
+                  : 'none',
             }}
-          >
-            <div
-              className="absolute inset-0 rounded-full"
-              style={{
-                background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
-                backgroundSize: '200% 100%',
-                animation: 'shimmer-bar 1.8s linear infinite',
-              }}
-            />
-          </div>
+          />
         </div>
       </div>
+
       {surveyDone && phase !== 'done' && (
-        <div className="mt-6 w-full max-w-lg">
-          <div className="flex items-center gap-2 text-sm text-emerald-600 font-sans">
+        <div className="mt-3 w-full max-w-sm">
+          <div className="flex items-center gap-2 text-sm text-emerald-600 font-medium">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
@@ -823,21 +982,30 @@ export default function ScanningScreen({
       )}
 
       {faceMeshError && (
-        <div className="mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm max-w-lg">
+        <div className="mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm max-w-sm w-full">
           {faceMeshError}
         </div>
       )}
 
       {faceMeshLoading && (
-        <p className="text-sm text-gray-400 mt-2">
-          {t('scanning.modelLoading')}
-        </p>
+        <p className="text-sm text-gray-400 mt-2">{t('scanning.modelLoading')}</p>
       )}
 
       {faceMeshDelegate === 'CPU' && (
-        <p className="text-xs text-amber-500 mt-2">
-          {t('scanning.cpuFallback')}
-        </p>
+        <p className="text-xs text-amber-500 mt-2">{t('scanning.cpuFallback')}</p>
+      )}
+
+      {/* Retake button — always visible so user can escape if photo is wrong */}
+      {onRetake && phase !== 'done' && (
+        <button
+          onClick={onRetake}
+          className="mt-5 flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+          Загрузить другое фото
+        </button>
       )}
     </div>
   );

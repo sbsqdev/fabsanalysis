@@ -75,6 +75,19 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            // Heavy WASM runtime — load only when SAM/MediaPipe is actually needed
+            if (id.includes('node_modules/onnxruntime-web')) return 'vendor-onnx';
+            // PDF export — only triggered by button click
+            if (id.includes('node_modules/html2canvas')) return 'vendor-html2canvas';
+            // Supabase client — auth, always needed but small-ish
+            if (id.includes('node_modules/@supabase')) return 'vendor-supabase';
+            // React core — tiny, keep in main bundle
+          },
+        },
+      },
     },
     server: {
       port: 5173,

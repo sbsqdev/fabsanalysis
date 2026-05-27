@@ -7,8 +7,8 @@ interface AuthContextType {
   session: Session | null
   loading: boolean
   hasAccess: boolean
-  /** Register with email + password */
-  signUp: (email: string, password: string) => Promise<{ error: Error | null; needsEmailConfirmation: boolean }>
+  /** Register with email + password + optional phone */
+  signUp: (email: string, password: string, phone?: string) => Promise<{ error: Error | null; needsEmailConfirmation: boolean }>
   /** Login with email + password */
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe()
   }, [])
 
-  async function signUp(email: string, password: string) {
+  async function signUp(email: string, password: string, phone?: string) {
     const { data, error } = await supabase.auth.signUp({ email, password })
 
     // Create profile row immediately (also covered by DB trigger as fallback)
@@ -68,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         {
           id: data.user.id,
           email,
+          ...(phone ? { phone } : {}),
           subscription_status: 'pending', // requires Kaspi payment to become 'pro'
           created_at: new Date().toISOString(),
         },

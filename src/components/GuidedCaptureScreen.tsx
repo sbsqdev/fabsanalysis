@@ -706,121 +706,92 @@ function ProfileRotationGuide({ angle, yawProgress, holdProgress, targetYaw }: {
   holdProgress: number;
   targetYaw: number;
 }) {
-  const t = useT();
-  // Preview is mirrored (selfie mode), so visual turn direction is inverted:
-  // capture "left profile" => user should turn RIGHT in mirror UI.
+  // Preview is mirrored (selfie mode): capturing "left" profile → user turns right visually.
   const visualTurnLeft = angle === 'right';
   const isAtTarget = yawProgress >= targetYaw;
+  const pct = Math.min(100, Math.round((yawProgress / targetYaw) * 100));
+  const holdCirc = 2 * Math.PI * 36;
 
-  // Ring of ticks
-  const N = 44;
-  const C = 150, SIZE = 300;
-  const R_IN = 107, R_OUT = 123, R_SWEEP = 115;
-  const circ = 2 * Math.PI * R_SWEEP;
-  const litCount = Math.round(yawProgress * N);
-
-  const ticks = Array.from({ length: N }, (_, i) => {
-    const a = (i / N) * Math.PI * 2 - Math.PI / 2;
-    // fill ticks in rotation direction
-    const isLit = visualTurnLeft ? i < litCount : i >= (N - litCount);
-    return {
-      x1: C + R_IN  * Math.cos(a), y1: C + R_IN  * Math.sin(a),
-      x2: C + R_OUT * Math.cos(a), y2: C + R_OUT * Math.sin(a),
-      isLit,
-    };
-  });
-
-  const holdArc = holdProgress * circ;
+  const turnLabel = visualTurnLeft ? 'Поверните голову влево' : 'Поверните голову вправо';
 
   return (
     <>
       <style>{`
-        @keyframes nudge-left  { 0%,100%{transform:translateX(0)} 40%{transform:translateX(-8px)} }
-        @keyframes nudge-right { 0%,100%{transform:translateX(0)} 40%{transform:translateX(8px)}  }
-        .pg-nudge { animation: ${visualTurnLeft ? 'nudge-left' : 'nudge-right'} 1.3s ease-in-out infinite; display:inline-block; }
-        @keyframes pg-pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
+        @keyframes prg-nudge-l { 0%,100%{transform:translateX(0)} 45%{transform:translateX(-14px)} }
+        @keyframes prg-nudge-r { 0%,100%{transform:translateX(0)} 45%{transform:translateX(14px)} }
+        @keyframes prg-hold-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.04);opacity:0.8} }
       `}</style>
 
-      <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {/* Dark backdrop */}
-        <circle cx={C} cy={C} r={104} fill="rgba(0,0,0,0.28)" />
-
-        {/* Tick marks — light up green as face rotates */}
-        {ticks.map(({ x1, y1, x2, y2, isLit }, i) => (
-          <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-            stroke={isLit ? '#10b981' : 'rgba(255,255,255,0.22)'}
-            strokeWidth={isLit ? 3 : 2.5}
-            strokeLinecap="round"
-          />
-        ))}
-
-        {/* Countdown arc when holding at target */}
-        {isAtTarget && holdProgress > 0 && (
-          <circle cx={C} cy={C} r={R_SWEEP} fill="none"
-            stroke="#10b981" strokeWidth="4" strokeLinecap="round"
-            strokeDasharray={`${holdArc} ${circ - holdArc}`}
-            transform={`rotate(-90, ${C}, ${C})`}
-            style={{ filter: 'drop-shadow(0 0 8px #10b981)' }}
-          />
-        )}
-      </svg>
-
-      {/* Status / instruction below ring */}
-      <div
-        className="absolute left-0 right-0 bottom-[22%] sm:bottom-[18%] flex flex-col items-center gap-2 px-3"
-        style={{ pointerEvents: 'none' }}
-      >
+      {/* ── Instruction card — top of frame ── */}
+      <div className="absolute top-6 left-4 right-4 flex justify-center z-10" style={{ pointerEvents: 'none' }}>
         {isAtTarget ? (
-          <div style={{
-            color: '#10b981', fontSize: 15, fontWeight: 700,
-            textShadow: '0 1px 6px rgba(0,0,0,0.7)',
-            animation: 'pg-pulse 0.8s ease-in-out infinite',
-          }}>
-            {t('guided.holdCapturing')}
+          <div
+            className="flex items-center gap-3 bg-emerald-500/90 backdrop-blur-md rounded-2xl px-5 py-3.5 shadow-lg border border-emerald-300/30"
+            style={{ animation: 'prg-hold-pulse 0.9s ease-in-out infinite' }}
+          >
+            <span className="text-2xl">📸</span>
+            <div>
+              <p className="text-white font-bold text-sm leading-tight">Держите позицию!</p>
+              <p className="text-emerald-100 text-xs">Не двигайтесь — снимаю...</p>
+            </div>
           </div>
         ) : (
-          <>
-            {/* Compact mobile hint + detailed desktop pictograms */}
-            <div className="sm:hidden text-white text-xl font-semibold leading-none">
-              {visualTurnLeft ? '←' : '→'}
+          <div className="flex flex-col items-center gap-2 bg-black/70 backdrop-blur-md rounded-2xl px-5 py-4 shadow-lg border border-white/10 w-full max-w-xs">
+            {/* Animated arrow */}
+            <div
+              className="text-4xl leading-none"
+              style={{ animation: `${visualTurnLeft ? 'prg-nudge-l' : 'prg-nudge-r'} 1.3s ease-in-out infinite` }}
+            >
+              {visualTurnLeft ? '⬅️' : '➡️'}
             </div>
-            <div className="hidden sm:flex items-center gap-2">
-              <svg width={30} height={36} viewBox="0 0 36 42" fill="none">
-                <ellipse cx="18" cy="18" rx="11" ry="14" stroke="rgba(255,255,255,0.8)" strokeWidth="2"/>
-                <ellipse cx="13" cy="16" rx="2.5" ry="1.5" stroke="rgba(255,255,255,0.6)" strokeWidth="1.2"/>
-                <ellipse cx="23" cy="16" rx="2.5" ry="1.5" stroke="rgba(255,255,255,0.6)" strokeWidth="1.2"/>
-              </svg>
-              <div className="pg-nudge">
-                <svg width={28} height={20} viewBox="0 0 32 24" fill="none">
-                  {visualTurnLeft ? (
-                    <><path d="M26 12 L6 12" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-                    <path d="M12 6 L5 12 L12 18" stroke="white" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></>
-                  ) : (
-                    <><path d="M6 12 L26 12" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-                    <path d="M20 6 L27 12 L20 18" stroke="white" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></>
-                  )}
-                </svg>
-              </div>
-              <svg width={30} height={36} viewBox="0 0 36 42" fill="none">
-                {visualTurnLeft ? (
-                  <path d="M22 6 Q10 8 9 18 Q8 24 10 28 Q7 31 9 35 Q11 39 17 41 L22 41 L22 6 Z"
-                    stroke="rgba(255,255,255,0.8)" strokeWidth="2" fill="none"/>
-                ) : (
-                  <path d="M14 6 Q26 8 27 18 Q28 24 26 28 Q29 31 27 35 Q25 39 19 41 L14 41 L14 6 Z"
-                    stroke="rgba(255,255,255,0.8)" strokeWidth="2" fill="none"/>
-                )}
-              </svg>
-            </div>
-            <div style={{
-              color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 600,
-              textShadow: '0 1px 4px rgba(0,0,0,0.6)',
-            }}>
-              {yawProgress > 0.45
-                ? t('guided.almostThere')
-                : visualTurnLeft ? t('guided.turnLeft') : t('guided.turnRight')}
-            </div>
-          </>
+            <p className="text-white font-bold text-sm text-center leading-snug">{turnLabel}</p>
+            <p className="text-white/55 text-xs text-center">
+              {pct >= 70 ? '🔥 Почти! Чуть дальше...' : 'Медленно поворачивайте до профиля'}
+            </p>
+          </div>
         )}
+      </div>
+
+      {/* ── Progress / hold indicator — bottom ── */}
+      <div className="absolute bottom-[20%] left-5 right-5 flex flex-col items-center gap-2" style={{ pointerEvents: 'none' }}>
+        {isAtTarget && holdProgress > 0 ? (
+          /* Countdown ring when holding */
+          <svg width="88" height="88" viewBox="0 0 88 88">
+            <circle cx="44" cy="44" r="36" fill="rgba(0,0,0,0.55)" />
+            <circle cx="44" cy="44" r="36" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="7" />
+            <circle
+              cx="44" cy="44" r="36" fill="none"
+              stroke="#10b981" strokeWidth="7" strokeLinecap="round"
+              strokeDasharray={`${holdProgress * holdCirc} ${holdCirc}`}
+              transform="rotate(-90 44 44)"
+              style={{ filter: 'drop-shadow(0 0 6px #10b981)', transition: 'stroke-dasharray 0.1s linear' }}
+            />
+            <text x="44" y="50" textAnchor="middle" fill="white" fontSize="18" fontWeight="bold">
+              {Math.round(holdProgress * 100)}%
+            </text>
+          </svg>
+        ) : !isAtTarget ? (
+          /* Progress bar Прямо → Профиль */
+          <div className="w-full bg-black/55 backdrop-blur-sm rounded-2xl px-4 py-3 border border-white/10">
+            <div className="flex justify-between text-[11px] font-semibold mb-2">
+              <span className="text-white/50">😐 Прямо</span>
+              <span className={pct >= 80 ? 'text-emerald-400' : 'text-white/80'}>{pct}%</span>
+              <span className="text-white/50">😏 Профиль</span>
+            </div>
+            <div className="w-full bg-white/15 rounded-full h-2.5 overflow-hidden">
+              <div
+                className="h-2.5 rounded-full transition-all duration-150"
+                style={{
+                  width: `${pct}%`,
+                  background: pct >= 90
+                    ? 'linear-gradient(90deg,#10b981,#34d399)'
+                    : 'linear-gradient(90deg,#6366f1,#a855f7)',
+                  boxShadow: pct >= 70 ? '0 0 10px rgba(99,102,241,0.7)' : 'none',
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     </>
   );

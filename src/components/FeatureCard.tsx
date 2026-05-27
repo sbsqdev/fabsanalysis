@@ -489,7 +489,11 @@ function ProfileAngleCanvas({
       if (maskDataUrl) {
         const maskImg = new Image();
         maskImg.onload = () => {
+          // screen blend: dark regions vanish, bright glow edge adds neon aura on photo
+          const prev = drawCtx.globalCompositeOperation;
+          drawCtx.globalCompositeOperation = 'screen';
           drawCtx.drawImage(maskImg, 0, 0, W, H);
+          drawCtx.globalCompositeOperation = prev;
           renderAngles();
         };
         maskImg.src = maskDataUrl;
