@@ -37,18 +37,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) checkAccess(session.user.id).finally(() => setLoading(false))
-      else setLoading(false)
-    })
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        setSession(session)
+        setUser(session?.user ?? null)
+        if (session?.user) checkAccess(session.user.id).finally(() => setLoading(false))
+        else setLoading(false)
+      })
+      .catch(() => {
+        // Network error or bad config — treat as logged out
+        setLoading(false)
+      })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
       if (session?.user) void checkAccess(session.user.id)
-      else setHasAccess(false)
+      else { setHasAccess(false) }
     })
 
     return () => subscription.unsubscribe()
