@@ -5,8 +5,6 @@ import { featureLabel, statusLabel } from '../i18n';
 import { useLanguage, useT } from '../lib/language';
 import { localizeNarrativeText } from '../lib/narrativeLocalization';
 import { boostedConfidence } from '../analysis/scoring';
-import MeasurementCard from './MeasurementCard';
-import ObservationCard from './ObservationCard';
 import ProportionBar from './ProportionBar';
 import ProportionOverlay from './ProportionOverlay';
 import { computeProportions } from '../analysis/proportions';
@@ -35,6 +33,7 @@ interface Props {
   gender?: Gender | null;
   population?: PopulationGroup;
   defaultExpanded?: boolean;
+  hideTransform?: boolean;
 }
 
 // ─── AI Insight text cleanup ───────────────────────────────────────────────
@@ -520,6 +519,7 @@ const STATUS_CONFIG = {
     text: 'text-emerald-700',
     border: 'border-emerald-200',
     dot: 'bg-emerald-500',
+    accentBar: 'border-l-emerald-500',
   },
   strength: {
     label: statusLabel('strength'),
@@ -527,6 +527,7 @@ const STATUS_CONFIG = {
     text: 'text-blue-700',
     border: 'border-blue-200',
     dot: 'bg-blue-500',
+    accentBar: 'border-l-blue-500',
   },
   attention: {
     label: statusLabel('attention'),
@@ -534,6 +535,7 @@ const STATUS_CONFIG = {
     text: 'text-amber-700',
     border: 'border-amber-200',
     dot: 'bg-amber-500',
+    accentBar: 'border-l-amber-500',
   },
   insufficient_data: {
     label: statusLabel('insufficient_data'),
@@ -541,7 +543,38 @@ const STATUS_CONFIG = {
     text: 'text-gray-500',
     border: 'border-gray-200',
     dot: 'bg-gray-400',
+    accentBar: 'border-l-gray-300',
   },
+};
+
+// Procedure hints shown when status is 'attention'
+const FEATURE_PROCEDURE_HINT: Partial<Record<string, string>> = {
+  Lips: 'Асимметрию губ и нарушения пропорций корректируют гиалуроновыми филлерами.',
+  Nose: 'Форму и угол носа можно улучшить нитевым лифтингом или ринопластикой.',
+  Cheeks: 'Объём и контур скул восстанавливают филлерами или контурной пластикой.',
+  Jaw: 'Чёткость овала лица подчёркивают липолитиками или нитевым лифтингом.',
+  Chin: 'Форму подбородка корректируют филлерами или контурной пластикой.',
+  Eyes: 'Асимметрию и птоз века улучшают ботоксом или блефаропластикой.',
+  Eyebrows: 'Форму и симметрию бровей корректируют ботоксом или перманентным макияжем.',
+  Skin: 'Качество кожи улучшают лазерными и химическими пилингами, мезотерапией.',
+  Neck: 'Контур шеи и подбородка корректируют липолитиками и нитевым лифтингом.',
+};
+
+// Prominent "within norm" conclusion shown directly under the metrics
+const WITHIN_NORM_CONCLUSION_SHORT: Record<'ru' | 'en', string> = {
+  ru: 'Ваши пропорции находятся в идеальном балансе.',
+  en: 'Your proportions are in perfect balance.',
+};
+
+// Longer doctor-style explanation — revealed inside "Подробнее", above the metrics
+const LIPS_WITHIN_NORM_LONG: Record<'ru' | 'en', string> = {
+  ru: 'Пропорции верхней и нижней губы находятся в правильном балансе. Такое соотношение делает нижнюю часть лица аккуратной. Черты лица воспринимаются гармонично, так как ни одна из губ не забирает на себя лишнее внимание. Менять форму в этом случае не требуется. Для поддержания качества кожи врач может предложить только процедуру увлажнения без добавления объёма.',
+  en: 'The proportions of the upper and lower lip are in the right balance. This ratio keeps the lower part of the face looking neat and refined. The features read as harmonious, because neither lip draws excess attention. There is no need to change the shape. To maintain skin quality, the doctor may suggest only a hydration treatment, without adding volume.',
+};
+
+const CONCLUSION_LABEL: Record<'ru' | 'en', string> = {
+  ru: 'Заключение специалиста',
+  en: 'Specialist conclusion',
 };
 
 export default function FeatureCard({
@@ -559,6 +592,7 @@ export default function FeatureCard({
   gender,
   population = 'default',
   defaultExpanded = false,
+  hideTransform = false,
 }: Props) {
   const t = useT();
   const { lang } = useLanguage();
@@ -575,6 +609,12 @@ export default function FeatureCard({
     () => feature.observations.filter((obs) => !isLimitationLike(obs)),
     [feature.observations],
   );
+  // Plain-language notes only — drop raw "Label: number" echo lines, which
+  // just duplicate the proportion bars above and read as jargon to clients.
+  const humanObservations = useMemo(
+    () => sanitizedObservations.filter((obs) => !/:\s*-?[\d.]/.test(obs)),
+    [sanitizedObservations],
+  );
   const sanitizedRecommendations = useMemo(
     () => feature.recommendations.filter((rec) => !isLimitationLike(rec)),
     [feature.recommendations],
@@ -584,27 +624,38 @@ export default function FeatureCard({
     [aiResult?.aiRecommendations],
   );
 
+  // Human summary — shown ALWAYS visible (above "Подробнее" button)
+  const summaryText = useMemo(() => {
+    // Priority 1: first sentence from GPT AI insight
+    if (aiResult?.aiInsight) {
+      const cleaned = cleanAiInsight(aiResult.aiInsight, lang);
+      const sentences = cleaned.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 10 && !/\(\s*(идеал|ideal)/i.test(s) && !isLimitationLike(s));
+      if (sentences[0]) return sentences[0];
+    }
+    // Priority 2: first non-measurement observation (specific to this person's scan)
+    const humanObs = feature.observations.filter((obs) => !/:\s*-?[\d.]/.test(obs) && !isLimitationLike(obs));
+    if (humanObs[0]) return humanObs[0];
+    // Priority 3: first human-friendly recommendation
+    return sanitizedRecommendations[0] ?? '';
+  }, [aiResult, feature.observations, lang, sanitizedRecommendations]);
+
+  // Procedure hint — shown when status is 'attention'
+  const procedureHint = useMemo(() => {
+    if (feature.status !== 'attention') return null;
+    return FEATURE_PROCEDURE_HINT[feature.name] ?? null;
+  }, [feature.status, feature.name]);
+
+  // Prominent within-norm conclusion (short banner + longer doctor explanation)
+  const withinNorm = feature.status === 'within_norm';
+  const conclusionLong = feature.name === 'Lips' ? LIPS_WITHIN_NORM_LONG[lang] : null;
+
   const proportions = useMemo(
     () => computeProportions(feature.name, feature.measurements, gender ?? null, population),
     [feature.name, feature.measurements, gender, population, lang],
   );
-  const proportionMeasurementKeys = useMemo(() => {
-    const keys = new Set<string>();
-    if (!proportions?.items?.length) return keys;
-    for (const item of proportions.items) {
-      if (item.key && !item.key.startsWith('_')) {
-        keys.add(item.key);
-      }
-    }
-    return keys;
-  }, [proportions]);
-  const additionalMeasurements = useMemo(
-    () => Object.entries(feature.measurements).filter(([key]) => !proportionMeasurementKeys.has(key)),
-    [feature.measurements, proportionMeasurementKeys],
-  );
-  const hasAdditionalMeasurements = additionalMeasurements.length > 0;
   const transformPresetId = FEATURE_TRANSFORM_MAP[feature.name] as TransformPresetId | undefined;
   const canTransform =
+    !hideTransform &&
     !!transformPresetId &&
     !!frontImageDataUrl &&
     !!landmarks &&
@@ -704,43 +755,103 @@ export default function FeatureCard({
       }`}
       style={{ animationDelay: `${index * 60}ms` }}
     >
-      {/* Header — hidden when opened via tab slider */}
+      {/* Header + Always-visible summary — hidden only when opened via tab slider */}
       {!defaultExpanded && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="w-full px-4 py-3 sm:px-5 sm:py-4 text-left hover:bg-gray-50/50 transition-colors border-l-4 border-l-emerald-500 rounded-t-xl"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <span className="text-base sm:text-lg font-semibold text-gray-900 shrink-0">
-                {featureLabel(feature.name)}
-              </span>
-              <span
-                className="inline-flex items-center"
-                title={cfg.label}
-                aria-label={cfg.label}
-              >
-                <span className={`w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[11px] sm:text-xs text-gray-400 tabular-nums">
+        <div className={`border-l-4 ${cfg.accentBar} rounded-t-xl`}>
+          {/* Feature name row */}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="w-full px-4 pt-3 pb-1 sm:px-5 sm:pt-4 sm:pb-1 text-left hover:bg-gray-50/30 transition-colors"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-base sm:text-lg font-semibold text-gray-900 shrink-0">
+                  {featureLabel(feature.name)}
+                </span>
+                <span
+                  className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.text} shrink-0`}
+                  title={cfg.label}
+                >
+                  {cfg.label}
+                </span>
+              </div>
+              <span className="text-[11px] sm:text-xs text-gray-400 tabular-nums shrink-0">
                 {Math.round(effectiveConf * 100)}%
               </span>
+            </div>
+          </button>
+
+          {/* Human summary — always visible */}
+          {summaryText && (
+            <div className="px-4 sm:px-5 pt-1 pb-2">
+              <p className="text-sm text-gray-700 leading-relaxed">{summaryText}</p>
+            </div>
+          )}
+
+          {/* Within-norm conclusion — prominent, directly under the metrics */}
+          {withinNorm && (
+            <div className="px-4 sm:px-5 pb-2">
+              <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
+                <svg className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-sm font-medium text-emerald-800 leading-snug">
+                  {WITHIN_NORM_CONCLUSION_SHORT[lang]}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Procedure hint — only for attention status */}
+          {procedureHint && (
+            <div className="px-4 sm:px-5 pb-2">
+              <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                <span className="text-amber-500 shrink-0 mt-0.5">💡</span>
+                <p className="text-xs text-amber-800 leading-snug">{procedureHint}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Prominent Подробнее button */}
+          <div className="px-4 sm:px-5 pb-3">
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className={`flex items-center gap-1.5 text-sm font-semibold transition-colors ${
+                expanded
+                  ? 'text-gray-400 hover:text-gray-600'
+                  : 'text-indigo-600 hover:text-indigo-800'
+              }`}
+            >
+              {expanded ? 'Скрыть' : 'Подробнее'}
               <svg
-                className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
               </svg>
-            </div>
+            </button>
           </div>
-        </button>
+        </div>
       )}
 
       {/* Expandable content */}
       {expanded && (
-        <div className={`px-4 pb-4 sm:px-5 sm:pb-5 rounded-b-xl ${defaultExpanded ? '' : 'border-t border-gray-100 border-l border-l-emerald-200'}`}>
+        <div className={`px-4 pb-4 sm:px-5 sm:pb-5 rounded-b-xl ${defaultExpanded ? '' : 'border-t border-gray-100'}`}>
+
+          {/* Within-norm doctor conclusion — shown above the metrics */}
+          {withinNorm && conclusionLong && (
+            <div className="mt-3 sm:mt-4 px-3 py-3 sm:px-4 sm:py-3.5 bg-emerald-50/70 border border-emerald-100 rounded-lg">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <svg className="w-4 h-4 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">
+                  {CONCLUSION_LABEL[lang]}
+                </span>
+              </div>
+              <p className="text-sm text-emerald-900/80 leading-relaxed">{conclusionLong}</p>
+            </div>
+          )}
 
           {/* Proportions */}
           {proportions && proportions.items.length > 0 && (
@@ -967,145 +1078,20 @@ export default function FeatureCard({
             </div>
           )}
 
-          {/* Observations */}
-          <div className="mt-4">
-            <h4 className="text-sm font-medium text-gray-700 mb-1">{t('featureCard.observations')}</h4>
-            <p className="text-[11px] text-gray-400 mb-2">{t('featureCard.observationsDesc')}</p>
-
-            {/* Photo showing the full feature region in context */}
-            {frontImageDataUrl && landmarks && landmarks.length > 0 && (
-              <div className="mb-3">
-                <ProportionOverlay
-                  imageDataUrl={frontImageDataUrl}
-                  landmarks={landmarks}
-                  featureName={feature.name}
-                  proportions={proportions?.items ?? []}
-                  activeProportionKey={null}
-                />
-                <p className="mt-1 text-[9px] text-gray-400 text-center">{t('featureCard.proportionHint')}</p>
-              </div>
-            )}
-
-            <div className="hidden sm:flex gap-2">
-              <div className="flex-1 flex flex-col gap-2">
-                {sanitizedObservations.filter((_, i) => i % 2 === 0).map((obs, i) => {
-                  const obsKey = `obs_${i * 2}`;
-                  return (
-                    <ObservationCard
-                      key={obsKey}
-                      text={obs}
-                      obsKey={obsKey}
-                      expanded={activeProportionKey === obsKey}
-                      onExpandedChange={(isExpanded) => {
-                        setActiveProportionKey((cur) => isExpanded ? obsKey : cur === obsKey ? null : cur);
-                      }}
-                    />
-                  );
-                })}
-              </div>
-              <div className="flex-1 flex flex-col gap-2">
-                {sanitizedObservations.filter((_, i) => i % 2 !== 0).map((obs, i) => {
-                  const obsKey = `obs_${i * 2 + 1}`;
-                  return (
-                    <ObservationCard
-                      key={obsKey}
-                      text={obs}
-                      obsKey={obsKey}
-                      expanded={activeProportionKey === obsKey}
-                      onExpandedChange={(isExpanded) => {
-                        setActiveProportionKey((cur) => isExpanded ? obsKey : cur === obsKey ? null : cur);
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:hidden">
-              {sanitizedObservations.map((obs, i) => {
-                const obsKey = `obs_${i}`;
-                return (
-                  <ObservationCard
-                    key={obsKey}
-                    text={obs}
-                    obsKey={obsKey}
-                    expanded={activeProportionKey === obsKey}
-                    onExpandedChange={(isExpanded) => {
-                      setActiveProportionKey((cur) => isExpanded ? obsKey : cur === obsKey ? null : cur);
-                    }}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Additional measurements (excluding metrics already shown in Proportions) */}
-          {hasAdditionalMeasurements && (
+          {/* Observations — plain-language notes only (no raw "label: number" echoes) */}
+          {humanObservations.length > 0 && (
             <div className="mt-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-1">{t('featureCard.extraMeasurements')}</h4>
-              <p className="text-[11px] text-gray-400 mb-2">{t('featureCard.extraMeasurementsDesc')}</p>
-              {/* Low-confidence badge for soft-tissue profile metrics */}
-              {typeof feature.measurements.softTissue_confidence === 'number' &&
-                feature.measurements.softTissue_confidence < 0.35 && (
-                <p className="text-[10px] text-amber-600 bg-amber-50 rounded px-2 py-1 mb-2 inline-block">
-                  {t('featureCard.lowProfileAccuracy')}
-                </p>
-              )}
+              <h4 className="text-sm font-medium text-gray-700 mb-1">{t('featureCard.observations')}</h4>
+              <p className="text-[11px] text-gray-400 mb-2">{t('featureCard.observationsDesc')}</p>
 
-              {/* Photo showing the feature region for visual context */}
-              {frontImageDataUrl && landmarks && landmarks.length > 0 && (
-                <div className="mb-3">
-                  <ProportionOverlay
-                    imageDataUrl={frontImageDataUrl}
-                    landmarks={landmarks}
-                    featureName={feature.name}
-                    proportions={proportions?.items ?? []}
-                    activeProportionKey={null}
-                  />
-                  <p className="mt-1 text-[9px] text-gray-400 text-center">{t('featureCard.proportionHint')}</p>
-                </div>
-              )}
-
-              <div className="hidden sm:flex gap-2">
-                <div className="flex-1 flex flex-col gap-2">
-                  {additionalMeasurements.filter((_, i) => i % 2 === 0).map(([key, value]) => (
-                    <MeasurementCard
-                      key={key}
-                      measurementKey={key}
-                      value={value}
-                      expanded={activeProportionKey === key}
-                      onExpandedChange={(isExpanded) => {
-                        setActiveProportionKey((cur) => isExpanded ? key : cur === key ? null : cur);
-                      }}
-                    />
-                  ))}
-                </div>
-                <div className="flex-1 flex flex-col gap-2">
-                  {additionalMeasurements.filter((_, i) => i % 2 !== 0).map(([key, value]) => (
-                    <MeasurementCard
-                      key={key}
-                      measurementKey={key}
-                      value={value}
-                      expanded={activeProportionKey === key}
-                      onExpandedChange={(isExpanded) => {
-                        setActiveProportionKey((cur) => isExpanded ? key : cur === key ? null : cur);
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 sm:hidden">
-                {additionalMeasurements.map(([key, value]) => (
-                  <MeasurementCard
-                    key={key}
-                    measurementKey={key}
-                    value={value}
-                    expanded={activeProportionKey === key}
-                    onExpandedChange={(isExpanded) => {
-                      setActiveProportionKey((cur) => isExpanded ? key : cur === key ? null : cur);
-                    }}
-                  />
+              <ul className="space-y-2">
+                {humanObservations.map((obs, i) => (
+                  <li key={`obs_${i}`} className="flex gap-2.5 text-sm text-gray-700 leading-relaxed bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5">
+                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
+                    <span>{localizeNarrativeText(obs, lang)}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
           )}
 

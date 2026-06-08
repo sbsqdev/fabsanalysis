@@ -9,6 +9,8 @@ import { handleTransform } from './transform-handler.mjs';
 import { handlePayment } from './payment-routes.mjs';
 import { handleAnalyses } from './analysis-save-routes.mjs';
 import { handleVerifyKaspi } from './verifyKaspi-handler.mjs';
+import { handleSummary } from './summary-handler.mjs';
+import { handleApipayCreate, handleApipayStatus, handleApipayWebhook } from './apipay-handler.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,6 +111,66 @@ function corsHeaders(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, stripe-signature');
 }
 
+/**
+ * POST /api/phone-lookup
+ * Body: { phone: "+7XXXXXXXXXX" }
+ * Returns: { email: "..." } or 404.
+ *
+ * Requires env: SUPABASE_SERVICE_KEY (project Settings → API → service_role secret).
+ * This key bypasses RLS, so this endpoint must NOT be exposed without rate-limiting in prod.
+ */
+async function handlePhoneLookup(req, res) {
+  const serviceKey = process.env.SUPABASE_SERVICE_KEY;
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+
+  if (!serviceKey || !supabaseUrl) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Phone lookup not configured on server.' }));
+    return;
+  }
+
+  let body = '';
+  for await (const chunk of req) body += chunk;
+  let phone;
+  try { ({ phone } = JSON.parse(body)); } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+    return;
+  }
+
+  if (!phone || typeof phone !== 'string') {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'phone required' }));
+    return;
+  }
+
+  // Query profiles table using service role key (bypasses RLS)
+  const apiUrl = `${supabaseUrl}/rest/v1/profiles?phone=eq.${encodeURIComponent(phone)}&select=email&limit=1`;
+  const resp = await fetch(apiUrl, {
+    headers: {
+      'apikey': serviceKey,
+      'Authorization': `Bearer ${serviceKey}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!resp.ok) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'DB query failed' }));
+    return;
+  }
+
+  const rows = await resp.json();
+  if (!Array.isArray(rows) || rows.length === 0 || !rows[0].email) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ email: rows[0].email }));
+}
+
 /** Structured request logger for API calls — visible in PM2 logs */
 function logApi(method, url, statusCode, durationMs, meta = {}) {
   const ts = new Date().toISOString();
@@ -143,12 +205,23 @@ const server = createServer(async (req, res) => {
     };
   }
 
+  // Phone → email lookup for login-with-phone feature.
+  // Requires SUPABASE_SERVICE_KEY env var (Supabase project settings → API → service_role key).
+  if (req.url === '/api/phone-lookup' && req.method === 'POST') {
+    await handlePhoneLookup(req, res); return;
+  }
+
   // AI analysis endpoints (protected by user id header in prod)
   if (req.url.startsWith('/api/analyze')) { await handleAnalyze(req, res); return; }
   if (req.url.startsWith('/api/profile-landmarks')) { await handleProfileLandmarks(req, res); return; }
   if (req.url.startsWith('/api/transform')) { await handleTransform(req, res); return; }
+  if (req.url.startsWith('/api/summary')) { await handleSummary(req, res); return; }
 
   // Kaspi receipt verification
+  if (req.url.startsWith('/api/apipay/create'))  { await handleApipayCreate(req, res); return; }
+  if (req.url.startsWith('/api/apipay/status'))  { await handleApipayStatus(req, res); return; }
+  if (req.url.startsWith('/api/apipay/webhook')) { await handleApipayWebhook(req, res); return; }
+
   if (req.url.startsWith('/api/verifyKaspi')) { await handleVerifyKaspi(req, res); return; }
 
   // Payment endpoints

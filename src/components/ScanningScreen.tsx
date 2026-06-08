@@ -142,6 +142,10 @@ export default function ScanningScreen({
   faceMeshDelegate,
 }: Props) {
   const t = useT();
+  // Compute image aspect ratio once so container never crops the image.
+  // With a matching aspect ratio, object-cover == object-contain == no crop,
+  // and the canvas overlay aligns perfectly with the face landmarks.
+  const imgAspect = canvas.width / canvas.height;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<Phase>('loading_model');
   const [progress, setProgress] = useState(0);
@@ -180,7 +184,7 @@ export default function ScanningScreen({
               }))
           : Promise.resolve({ ok: true, error: null as string | null });
         // Animate progress in loading phase to avoid "stuck at 10%" perception.
-        const ticker = setInterval(() => setProgress((p) => Math.min(p + 2, hasProfiles ? 46 : 38)), 500);
+        const ticker = setInterval(() => setProgress((p) => Math.min(p + 3, hasProfiles ? 46 : 38)), 200);
         try {
           if (!faceMeshReady) {
             await faceMeshInitialize();
@@ -188,8 +192,8 @@ export default function ScanningScreen({
           if (hasProfiles) {
             const samInit = await samPrefetch;
             if (!samInit.ok) {
-              console.error('[SAM] Initialization failed before scan:', samInit.error ?? 'unknown');
-              throw new Error(t('scanning.samLoadError'));
+              // SAM failure is non-fatal — continue without profile segmentation
+              console.warn('[SAM] Initialization failed, continuing without profile masks:', samInit.error ?? 'unknown');
             }
           }
         } finally {
@@ -198,8 +202,6 @@ export default function ScanningScreen({
 
         setProgress(40);
         setPhase('detecting_front');
-
-        await new Promise((r) => setTimeout(r, 300));
 
         // Phase 2: detect front face
         const result = faceMeshDetect(canvas);
@@ -219,7 +221,7 @@ export default function ScanningScreen({
         // Draw landmarks overlay on front image
         drawLandmarks(result.landmarks, canvas.width, canvas.height);
 
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 150));
 
         // Phase 3: process profiles if available
         let profileLeft: ProfileScanResult | undefined;
@@ -242,7 +244,6 @@ export default function ScanningScreen({
           if (leftCapture) {
             setPhase('detecting_left');
             setProgress(55);
-            await new Promise((r) => setTimeout(r, 300));
 
             const leftCtx = leftCapture.canvas.getContext('2d');
             const leftImageData = leftCtx?.getImageData(0, 0, leftCapture.canvas.width, leftCapture.canvas.height) ?? leftCapture.imageData;
@@ -274,7 +275,6 @@ export default function ScanningScreen({
           if (rightCapture) {
             setPhase('detecting_right');
             setProgress(75);
-            await new Promise((r) => setTimeout(r, 300));
 
             const rightCtx = rightCapture.canvas.getContext('2d');
             const rightImageData = rightCtx?.getImageData(0, 0, rightCapture.canvas.width, rightCapture.canvas.height) ?? rightCapture.imageData;
@@ -754,9 +754,10 @@ export default function ScanningScreen({
 
       {/* ── Main scan area ────────────────────────────────────────── */}
       <div
-        className="relative w-full max-w-sm rounded-3xl overflow-hidden mb-4"
+        className="relative w-full max-w-sm rounded-3xl overflow-hidden mb-4 self-center"
         style={{
-          height: '58vh',
+          aspectRatio: String(imgAspect),
+          maxHeight: '62svh',
           boxShadow: phase === 'done'
             ? '0 0 0 2px rgba(52,211,153,0.4), 0 8px 40px rgba(0,0,0,0.15)'
             : phase === 'error'

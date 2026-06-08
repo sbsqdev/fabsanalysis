@@ -325,6 +325,8 @@ const en: Record<string, string> = {
   'scanning.capturedAlt': 'Captured face',
 
   // ─── Report Screen ────────────────────────────────────────────────────────
+  'report.aiSummaryTitle': 'AI summary of your lips',
+  'report.aiSummaryLoading': 'AI is gently preparing your lip summary…',
   'report.title': 'Lip Analysis',
   'report.createdAt': 'Generated',
   'report.generalTab': 'Overview',
@@ -406,6 +408,7 @@ const en: Record<string, string> = {
   'proportion.yourValue': 'Your value',
   'proportion.howToRead': 'How to read',
   'proportion.whyImportant': 'Why it matters',
+  'proportion.conclusion': 'Conclusion',
 
   // ─── Feature Card ─────────────────────────────────────────────────────────
   'featureCard.leftProfile': 'left profile',

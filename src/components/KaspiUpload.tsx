@@ -1,119 +1,160 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../lib/auth'
 
-// ─── Update these with real ProFace/SB Kaspi details ──────────────────────────
-const KASPI_RECIPIENT_NAME  = 'SB dev'
-const KASPI_RECIPIENT_PHONE = '+7 (701) 017-77-10'
-const KASPI_AMOUNT          = '3 000'
+// ─── Payment config (display only; amount is enforced server-side) ────────────
+const KASPI_AMOUNT = '3 000'
 
 interface Props {
   onVerified: () => void
 }
 
+type Phase = 'idle' | 'creating' | 'waiting' | 'success' | 'error'
+
+const POLL_INTERVAL_MS = 4000
+const POLL_TIMEOUT_MS = 5 * 60 * 1000 // stop polling after 5 min
+
+/** Format raw digits into a friendly +7 (XXX) XXX-XX-XX as the user types. */
+function formatPhone(raw: string): string {
+  let d = raw.replace(/\D/g, '')
+  if (d.startsWith('8')) d = '7' + d.slice(1)
+  if (!d.startsWith('7')) d = '7' + d
+  d = d.slice(0, 11)
+  const p = d.slice(1)
+  let out = '+7'
+  if (p.length > 0) out += ' (' + p.slice(0, 3)
+  if (p.length >= 3) out += ') ' + p.slice(3, 6)
+  if (p.length >= 6) out += '-' + p.slice(6, 8)
+  if (p.length >= 8) out += '-' + p.slice(8, 10)
+  return out
+}
+
+function isPhoneComplete(raw: string): boolean {
+  const d = raw.replace(/\D/g, '')
+  return d.length === 11
+}
+
 export default function KaspiUpload({ onVerified }: Props) {
   const { session, refreshAccess } = useAuth()
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'pending'>('idle')
+  const [phone, setPhone] = useState('+7 ')
+  const [phase, setPhase] = useState<Phase>('idle')
   const [message, setMessage] = useState('')
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollDeadline = useRef<number>(0)
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    if (!f.type.startsWith('image/')) {
-      setMessage('Поддерживаются только изображения (PNG, JPG). Сделайте скриншот чека.')
-      setStatus('error')
+  useEffect(() => {
+    return () => { if (pollTimer.current) clearTimeout(pollTimer.current) }
+  }, [])
+
+  function handlePhoneChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setPhone(formatPhone(e.target.value))
+    if (phase === 'error') { setPhase('idle'); setMessage('') }
+  }
+
+  async function pollStatus(invoiceId: string) {
+    if (!session?.access_token) return
+    if (Date.now() > pollDeadline.current) {
+      setPhase('error')
+      setMessage('Время ожидания истекло. Если вы оплатили — обновите страницу. Иначе попробуйте снова.')
       return
     }
-    if (f.size > 8 * 1024 * 1024) {
-      setMessage('Файл слишком большой (максимум 8 MB).')
-      setStatus('error')
-      return
+    try {
+      const resp = await fetch('/api/apipay/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId, accessToken: session.access_token }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (data?.paid) {
+        setPhase('success')
+        setMessage('Оплата подтверждена! Доступ открыт.')
+        // Grant access immediately — don't block on refreshAccess (can fail/be slow)
+        setTimeout(onVerified, 500)
+        void refreshAccess()
+        return
+      }
+      const status = data?.status as string | undefined
+      if (status === 'cancelled' || status === 'expired' || status === 'error' || status === 'refunded') {
+        setPhase('error')
+        setMessage('Оплата не завершена (счёт отменён или истёк). Попробуйте ещё раз.')
+        return
+      }
+    } catch {
+      // transient — keep polling
     }
-    setFile(f)
-    setStatus('idle')
-    setMessage('')
-    const reader = new FileReader()
-    reader.onload = () => setPreview(reader.result as string)
-    reader.readAsDataURL(f)
+    pollTimer.current = setTimeout(() => pollStatus(invoiceId), POLL_INTERVAL_MS)
   }
 
   async function handleSubmit() {
-    if (!file || !session?.access_token) return
-    setStatus('loading')
+    if (!isPhoneComplete(phone)) {
+      setPhase('error')
+      setMessage('Введите корректный номер телефона.')
+      return
+    }
+    if (!session?.access_token) {
+      setPhase('error')
+      setMessage('Сессия не найдена. Войдите в аккаунт и попробуйте снова.')
+      return
+    }
+
+    setPhase('creating')
     setMessage('')
-
     try {
-      // Convert file to base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const result = reader.result as string
-          // Strip "data:image/png;base64," prefix
-          resolve(result.split(',')[1])
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(file)
-      })
-
-      const res = await fetch('/api/verifyKaspi', {
+      const resp = await fetch('/api/apipay/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileBase64: base64,
-          mimeType: file.type,
-          accessToken: session.access_token,
-        }),
+        body: JSON.stringify({ phone, accessToken: session.access_token }),
       })
+      const data = await resp.json().catch(() => ({}))
 
-      const data = await res.json() as { valid?: boolean; pending?: boolean; message?: string; error?: string }
-
-      if (data.valid) {
-        setStatus('success')
-        setMessage(data.message ?? 'Оплата подтверждена!')
-        await refreshAccess()
-        setTimeout(onVerified, 1200)
-      } else if (data.pending) {
-        setStatus('pending')
-        setMessage(data.message ?? 'Чек на проверке.')
-      } else {
-        setStatus('error')
-        setMessage(data.message ?? data.error ?? 'Чек не прошёл проверку.')
+      if (!resp.ok) {
+        setPhase('error')
+        setMessage(data?.error || 'Не удалось создать счёт. Попробуйте ещё раз.')
+        return
       }
+
+      if (data?.alreadyPaid) {
+        setPhase('success')
+        setMessage('Доступ уже активирован.')
+        await refreshAccess()
+        setTimeout(onVerified, 800)
+        return
+      }
+
+      if (!data?.invoiceId) {
+        setPhase('error')
+        setMessage('Сервис оплаты вернул некорректный ответ. Попробуйте позже.')
+        return
+      }
+
+      setPhase('waiting')
+      setMessage('Запрос на оплату отправлен в Kaspi на ваш номер. Подтвердите его в приложении Kaspi.kz.')
+      pollDeadline.current = Date.now() + POLL_TIMEOUT_MS
+      pollTimer.current = setTimeout(() => pollStatus(data.invoiceId), POLL_INTERVAL_MS)
     } catch {
-      setStatus('error')
-      setMessage('Ошибка соединения. Попробуйте ещё раз.')
+      setPhase('error')
+      setMessage('Ошибка сети. Проверьте подключение и попробуйте снова.')
     }
   }
+
+  const busy = phase === 'creating' || phase === 'waiting'
 
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50 overflow-hidden">
       {/* Header */}
       <div className="bg-amber-100 border-b border-amber-200 px-5 py-4">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-lg">🔒</span>
-          <h3 className="font-semibold text-amber-900 text-base">Разблокируйте полный отчёт</h3>
-        </div>
-        <p className="text-xs text-amber-700">Оплатите через Kaspi и загрузите скриншот чека</p>
+        <h3 className="font-bold text-amber-900 text-base mb-1">
+          Открой свой анализ за 3 000 ₸
+        </h3>
+        <p className="text-xs text-amber-700 leading-relaxed">
+          Консультация у косметолога — от 15 000 ₸ и без цифр. Здесь — точные данные твоего лица прямо сейчас.
+        </p>
       </div>
 
       <div className="p-5 space-y-4">
-        {/* Payment instructions */}
-        <div className="bg-white rounded-xl border border-amber-200 p-4 space-y-2.5">
-          <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide mb-3">
-            Реквизиты для оплаты
-          </p>
+        {/* Amount */}
+        <div className="bg-white rounded-xl border border-amber-200 p-4">
           <div className="flex justify-between items-center">
-            <span className="text-xs text-gray-500">Получатель</span>
-            <span className="text-sm font-semibold text-gray-900">{KASPI_RECIPIENT_NAME}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-gray-500">Телефон (Kaspi Gold)</span>
-            <span className="text-sm font-mono text-gray-900">{KASPI_RECIPIENT_PHONE}</span>
-          </div>
-          <div className="flex justify-between items-center border-t border-amber-100 pt-2.5 mt-2.5">
-            <span className="text-xs text-gray-500">Сумма</span>
+            <span className="text-xs text-gray-500">Сумма к оплате</span>
             <span className="text-base font-bold text-amber-700">{KASPI_AMOUNT} ₸</span>
           </div>
         </div>
@@ -122,91 +163,64 @@ export default function KaspiUpload({ onVerified }: Props) {
         <ol className="space-y-1.5 text-xs text-amber-800">
           <li className="flex items-start gap-2">
             <span className="w-4 h-4 rounded-full bg-amber-200 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">1</span>
-            Откройте Kaspi.kz → «Переводы» → введите номер и сумму
+            Введите номер, привязанный к Kaspi Gold
           </li>
           <li className="flex items-start gap-2">
             <span className="w-4 h-4 rounded-full bg-amber-200 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">2</span>
-            Сделайте скриншот чека с надписью «Перевод успешно совершён»
+            Нажмите «Отправить запрос на оплату»
           </li>
           <li className="flex items-start gap-2">
             <span className="w-4 h-4 rounded-full bg-amber-200 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">3</span>
-            Загрузите скриншот ниже — доступ откроется автоматически
+            Подтвердите платёж в приложении Kaspi.kz — доступ откроется автоматически
           </li>
         </ol>
 
-        {/* File upload area */}
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          className={`relative rounded-xl border-2 border-dashed cursor-pointer transition-colors ${
-            preview
-              ? 'border-amber-300 bg-amber-50'
-              : 'border-amber-300 bg-white hover:border-amber-400 hover:bg-amber-50'
-          }`}
-        >
-          {preview ? (
-            <div className="relative">
-              <img
-                src={preview}
-                alt="Kaspi чек"
-                className="w-full max-h-48 object-contain rounded-xl"
-              />
-              <button
-                className="absolute top-2 right-2 bg-black/50 text-white text-[10px] px-2 py-1 rounded-lg hover:bg-black/70 transition-colors"
-                onClick={(e) => { e.stopPropagation(); setFile(null); setPreview(null); setStatus('idle'); setMessage('') }}
-              >
-                Изменить
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-2 py-7 px-4 text-center">
-              <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-              </svg>
-              <p className="text-sm font-medium text-amber-800">Загрузить скриншот чека</p>
-              <p className="text-xs text-amber-600">PNG или JPG · до 8 МБ</p>
-            </div>
-          )}
+        {/* Phone input */}
+        <div>
+          <label className="block text-xs font-medium text-amber-800 mb-1.5">Номер телефона (Kaspi)</label>
+          <input
+            type="tel"
+            inputMode="tel"
+            value={phone}
+            onChange={handlePhoneChange}
+            disabled={busy || phase === 'success'}
+            placeholder="+7 (___) ___-__-__"
+            className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-mono text-gray-900 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 disabled:opacity-60"
+          />
         </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/jpg,image/webp"
-          className="hidden"
-          onChange={handleFileChange}
-        />
 
         {/* Status message */}
         {message && (
           <div className={`rounded-lg px-3 py-2.5 text-sm ${
-            status === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-            status === 'pending' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-            'bg-red-50 text-red-700 border border-red-200'
+            phase === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+            phase === 'waiting' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+            phase === 'error'   ? 'bg-red-50 text-red-700 border border-red-200' :
+            'bg-amber-50 text-amber-700 border border-amber-200'
           }`}>
-            {status === 'success' && '✅ '}
-            {status === 'pending' && '⏳ '}
-            {status === 'error' && '❌ '}
+            {phase === 'success' && '✅ '}
+            {phase === 'waiting' && '⏳ '}
+            {phase === 'error' && '❌ '}
             {message}
           </div>
         )}
 
         {/* Submit button */}
-        {status !== 'success' && (
+        {phase !== 'success' && (
           <button
             onClick={handleSubmit}
-            disabled={!file || status === 'loading' || status === 'pending'}
+            disabled={busy || !isPhoneComplete(phone)}
             className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors text-sm"
           >
-            {status === 'loading' ? (
+            {busy ? (
               <span className="flex items-center justify-center gap-2">
                 <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Проверяем чек...
+                {phase === 'creating' ? 'Создаём счёт...' : 'Ожидаем подтверждения...'}
               </span>
             ) : (
-              'Подтвердить оплату →'
+              'Отправить запрос на оплату →'
             )}
           </button>
         )}

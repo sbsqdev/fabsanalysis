@@ -35,6 +35,12 @@
   animation: hue-shift 4s ease-in-out infinite;
 }
 
+/* Dynamic viewport height for mobile browsers with collapsing URL bars */
+.camera-viewport {
+  height: 60vh;
+  height: 60svh;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -45,10 +51,22 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
+    /* Safe area insets for iPhone notch / Dynamic Island / home bar */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   h1, h2, h3, h4 {
     @apply font-serif;
+  }
+
+  /* Prevent iOS Safari from zooming in when tapping inputs (requires 16px minimum) */
+  @media screen and (max-width: 767px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
   }
 }
 

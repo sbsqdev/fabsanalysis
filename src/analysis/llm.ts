@@ -42,6 +42,54 @@ export interface FeatureForLLM {
   confidence: number;
 }
 
+/**
+ * Fetches a short, plain-language summary of the user's face from DeepSeek
+ * via the backend (/api/summary). Measurements only — NO images.
+ * Resolves to the summary string, or null if unavailable (caller hides the block).
+ */
+export async function fetchFaceSummary(
+  features: FeatureForLLM[],
+  opts: { overallScore?: number; gender?: string | null; population?: string | null } = {},
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const lang = getCurrentLang();
+  try {
+    const payload = features.map((f) => ({
+      name: f.name,
+      status: f.status,
+      proportions: (Array.isArray(f.proportions) ? f.proportions : [])
+        .filter((p) => p.status !== 'ideal')
+        .slice(0, 4)
+        .map((p) => ({
+          label: p.label,
+          status: p.status,
+          dir: (p.userValue < p.idealMin ? 'below' : 'above') as 'below' | 'above',
+        })),
+    }));
+
+    const response = await fetch('/api/summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        features: payload,
+        ...(typeof opts.overallScore === 'number' ? { overallScore: opts.overallScore } : {}),
+        ...(opts.gender ? { gender: opts.gender } : {}),
+        ...(opts.population && opts.population !== 'default' ? { population: opts.population } : {}),
+        language: lang,
+      }),
+      signal,
+    });
+
+    if (!response.ok) return null;
+    const data = (await response.json()) as { summary?: string };
+    const summary = data.summary?.trim();
+    return summary && summary.length > 0 ? summary : null;
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') return null;
+    return null;
+  }
+}
+
 interface SSEEvent {
   partial?: string;
   done?: boolean;

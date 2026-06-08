@@ -18,8 +18,8 @@ export interface UseCameraOptions {
 
 const DEFAULT_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   facingMode: 'user',
-  width:  { ideal: 1920, min: 720 },
-  height: { ideal: 1080, min: 480 },
+  width:  { ideal: 1280 },
+  height: { ideal: 720 },
   frameRate: { ideal: 30 },
 };
 
@@ -37,6 +37,13 @@ export function useCamera(options: UseCameraOptions = {}) {
 
     if (video.srcObject !== stream) {
       video.srcObject = stream;
+    }
+
+    // Wait for metadata before play() — required on iOS Safari to avoid NotAllowedError
+    if (video.readyState < 1) {
+      await new Promise<void>((resolve) => {
+        video.addEventListener('loadedmetadata', () => resolve(), { once: true });
+      });
     }
 
     try {

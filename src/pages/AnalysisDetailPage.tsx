@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { deleteAnalysisById, fetchAnalysisById } from '../lib/analysisStore';
+import { track, EVENTS } from '../lib/analytics';
 import RadarInfographic from '../components/RadarInfographic';
 import type { FeatureAnalysis, StatusLevel } from '../types';
 import { computeOverallScore, countByStatus, averageConfidence } from '../analysis/scoring';
@@ -127,6 +128,7 @@ export default function AnalysisDetailPage() {
 
   useEffect(() => {
     if (!id) return;
+    track(EVENTS.PAST_ANALYSIS_OPENED, { analysis_id: id });
     (async () => {
       try {
         const row = await fetchAnalysisById(id);

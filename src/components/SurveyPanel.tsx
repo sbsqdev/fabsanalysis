@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react';
 import type React from 'react';
-import type { Gender, PopulationGroup, UserProfile, CosmeticProcedure } from '../types';
-import { COSMETIC_PROCEDURES } from '../types';
+import type { Gender, PopulationGroup, UserProfile } from '../types';
 import { useT } from '../lib/language';
 
 interface Props {
@@ -10,7 +9,7 @@ interface Props {
   context?: 'scanning' | 'report';
 }
 
-type Step = 'gender' | 'population' | 'procedures_yn' | 'procedures_list';
+type Step = 'gender' | 'population';
 
 const GENDER_ICONS: Record<string, React.ReactNode> = {
   female: (
@@ -29,26 +28,11 @@ const GENDER_ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-const PROCEDURE_LABEL_KEYS: Record<CosmeticProcedure, string> = {
-  'Ботокс / нейромодуляторы': 'survey.proc.botox',
-  'Гиалуроновые филлеры': 'survey.proc.fillers',
-  'Ринопластика': 'survey.proc.rhinoplasty',
-  'Блефаропластика': 'survey.proc.blepharoplasty',
-  'Подтяжка лица / SMAS-лифтинг': 'survey.proc.facelift',
-  'Нитевой лифтинг': 'survey.proc.threads',
-  'Лазерная шлифовка': 'survey.proc.laser',
-  'Химический пилинг': 'survey.proc.peel',
-  'Мезотерапия / биоревитализация': 'survey.proc.mesotherapy',
-  'Липолитики / коррекция овала': 'survey.proc.lipolytics',
-  'Контурная пластика (подбородок, скулы)': 'survey.proc.contour',
-};
-
 export default function SurveyPanel({ onComplete, context: _context = 'scanning' }: Props) {
   const t = useT();
   const [step, setStep] = useState<Step>('gender');
   const [gender, setGender] = useState<Gender | null>(null);
   const [population, setPopulation] = useState<PopulationGroup>('default');
-  const [selected, setSelected] = useState<Set<CosmeticProcedure>>(new Set());
 
   const GENDER_OPTIONS = useMemo<{ value: Gender; label: string }[]>(() => [
     { value: 'female', label: t('survey.female') },
@@ -67,28 +51,7 @@ export default function SurveyPanel({ onComplete, context: _context = 'scanning'
 
   function handlePopulationSelect(p: PopulationGroup) {
     setPopulation(p);
-    setTimeout(() => setStep('procedures_yn'), 200);
-  }
-
-  function handleProceduresYN(answer: boolean) {
-    if (answer) {
-      setStep('procedures_list');
-    } else {
-      onComplete({ gender, population, procedures: [], hasProcedures: false });
-    }
-  }
-
-  function toggleProcedure(p: CosmeticProcedure) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(p)) next.delete(p);
-      else next.add(p);
-      return next;
-    });
-  }
-
-  function handleSubmitProcedures() {
-    onComplete({ gender, population, procedures: Array.from(selected), hasProcedures: true });
+    setTimeout(() => onComplete({ gender, population: p, procedures: [], hasProcedures: false }), 200);
   }
 
   const backBtn = (to: Step) => (
@@ -163,69 +126,6 @@ export default function SurveyPanel({ onComplete, context: _context = 'scanning'
         </div>
       )}
 
-      {/* Step 2: Procedures yes/no */}
-      {step === 'procedures_yn' && (
-        <div className="animate-fade-in bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          {backBtn('population')}
-          <p className="text-sm font-semibold text-gray-800 mb-3 font-sans">
-            {t('survey.proceduresQ')}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleProceduresYN(true)}
-              className="flex-1 py-2.5 rounded-xl border-2 text-sm font-sans font-medium border-gray-200 bg-gray-50 text-gray-700 hover:border-amber-300 hover:bg-amber-50/50 transition-all duration-150"
-            >
-              {t('survey.yes')}
-            </button>
-            <button
-              onClick={() => handleProceduresYN(false)}
-              className="flex-1 py-2.5 rounded-xl border-2 text-sm font-sans font-medium border-gray-200 bg-gray-50 text-gray-700 hover:border-amber-300 hover:bg-amber-50/50 transition-all duration-150"
-            >
-              {t('survey.no')}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Procedures list */}
-      {step === 'procedures_list' && (
-        <div className="animate-fade-in bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          {backBtn('procedures_yn')}
-          <p className="text-sm font-semibold text-gray-800 mb-1 font-sans">
-            {t('survey.proceduresTitle')}
-          </p>
-          <p className="text-xs text-gray-400 font-sans mb-3">{t('survey.proceduresHint')}</p>
-
-          <div className="flex flex-wrap gap-2 mb-4">
-            {COSMETIC_PROCEDURES.map((p) => (
-              <button
-                key={p}
-                onClick={() => toggleProcedure(p)}
-                className={`text-xs font-sans px-3 py-1.5 rounded-full border transition-all duration-150 ${
-                  selected.has(p)
-                    ? 'border-amber-400 bg-amber-50 text-amber-700 font-medium'
-                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-amber-300'
-                }`}
-              >
-                {selected.has(p) && <span className="mr-1">✓</span>}
-                {t(PROCEDURE_LABEL_KEYS[p])}
-              </button>
-            ))}
-          </div>
-
-          <button
-            onClick={handleSubmitProcedures}
-            disabled={selected.size === 0}
-            className={`w-full py-2.5 rounded-xl text-sm font-sans font-semibold transition-all duration-150 ${
-              selected.size > 0
-                ? 'bg-gray-900 text-white hover:bg-gray-700'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            {selected.size > 0 ? `${t('survey.confirm')} (${selected.size})` : t('survey.selectAtLeastOne')}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

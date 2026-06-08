@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ProportionItem } from '../analysis/proportions';
+import { getLipVerdict } from '../analysis/lipVerdicts';
 import { useLanguage, useT } from '../lib/language';
 
 interface Props {
@@ -30,6 +31,7 @@ const KEY_GROUP: Record<string, string> = {
   softTissue_nPrnRatio: 'nose_profile',
   softTissue_cmSnRatio: 'nose_profile',
   upperLowerRatio: 'lip_balance',
+  symmetryIndex: 'lip_balance',
   mouthWidthToIPD: 'mouth_balance',
   mouthToNoseWidthRatio: 'mouth_balance',
   cornerTilt: 'lip_balance',
@@ -249,6 +251,9 @@ export default function ProportionBar({ item, expanded: controlledExpanded, onEx
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState(0);
   const extraInfo = getExtraInfo(item.key, lang);
+  // Doctor-written plain-language conclusion for this parameter (lips, RU).
+  const verdict = getLipVerdict(item.key, status, userValue, idealMin, idealMax, lang);
+  const verdictIsIdeal = status === 'ideal';
 
   const setExpanded = (next: boolean) => {
     if (typeof controlledExpanded !== 'boolean') {
@@ -262,7 +267,7 @@ export default function ProportionBar({ item, expanded: controlledExpanded, onEx
     if (contentRef.current) {
       setContentHeight(contentRef.current.scrollHeight);
     }
-  }, [expanded, description, howToRead, whyImportant, extraInfo?.standards, extraInfo?.celebrities]);
+  }, [expanded, description, howToRead, whyImportant, extraInfo?.standards, extraInfo?.celebrities, verdict?.detail]);
 
   // Compute bar extent: 80% padding beyond ideal range on each side
   const idealSpan = idealMax - idealMin || 0.01;
@@ -300,7 +305,7 @@ export default function ProportionBar({ item, expanded: controlledExpanded, onEx
     return v.toFixed(3);
   };
 
-  const hasDetails = !!(description || howToRead || whyImportant);
+  const hasDetails = !!(verdict?.detail || description || howToRead || whyImportant);
   const wrapperClass = expanded
     ? 'rounded-2xl border border-brand-200/70 bg-gradient-to-b from-brand-50/45 to-white px-2.5 py-3 sm:px-3 sm:py-3.5 shadow-[0_1px_2px_rgba(59,130,246,0.08)]'
     : 'rounded-2xl border border-gray-200/90 bg-white px-2.5 py-3 sm:px-3 sm:py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]';
@@ -349,22 +354,46 @@ export default function ProportionBar({ item, expanded: controlledExpanded, onEx
         </span>
       </div>
 
+      {/* Always-visible doctor conclusion — front and center under the metric */}
+      {verdict && (
+        <div
+          className={`mt-2 flex items-start gap-2 rounded-xl border px-2.5 py-2 ${
+            verdictIsIdeal
+              ? 'bg-emerald-50 border-emerald-200'
+              : 'bg-amber-50 border-amber-200'
+          }`}
+        >
+          {verdictIsIdeal ? (
+            <svg className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+          )}
+          <p className={`text-xs font-semibold leading-snug ${verdictIsIdeal ? 'text-emerald-800' : 'text-amber-800'}`}>
+            {verdict.verdict}
+          </p>
+        </div>
+      )}
+
       {/* "Подробнее" toggle + expandable detail card */}
       {hasDetails && (
-        <div className="mt-2 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden">
+        <div className="mt-2 rounded-xl border border-indigo-100 bg-indigo-50/40 overflow-hidden">
           <button
             type="button"
             onClick={() => setExpanded(!expanded)}
             aria-expanded={expanded}
             aria-label={expanded ? t('proportion.hide') : t('proportion.showMore')}
-            className="w-full flex items-center justify-center gap-1 py-1.5 text-[11px] font-medium text-gray-500 hover:text-gray-700 transition-colors focus:outline-none"
+            className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 transition-colors focus:outline-none"
           >
-            {!expanded && <span>{t('proportion.showMore')}</span>}
+            <span>{expanded ? t('proportion.hide') : t('proportion.showMore')}</span>
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 16 16"
               fill="currentColor"
-              className={`w-3 h-3 transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`}
+              className={`w-3.5 h-3.5 transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`}
             >
               <path fillRule="evenodd" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
             </svg>
@@ -376,8 +405,18 @@ export default function ProportionBar({ item, expanded: controlledExpanded, onEx
           >
             <div
               ref={contentRef}
-              className="text-[11px] leading-relaxed font-sans divide-y divide-gray-200/60"
+              className="text-[11px] leading-relaxed font-sans divide-y divide-gray-200/60 bg-white"
             >
+            {/* Section 0 — Doctor conclusion (why it matters + what can be done) */}
+            {verdict?.detail && (
+              <div className="px-2.5 pt-2.5 pb-2 sm:px-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-500 mb-0.5">
+                  {t('proportion.conclusion')}
+                </p>
+                <p className="text-gray-700">{verdict.detail}</p>
+              </div>
+            )}
+
             {/* Section 1 — What it measures */}
             {description && (
               <div className="px-2.5 pt-2.5 pb-2 sm:px-3">

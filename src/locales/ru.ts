@@ -325,6 +325,8 @@ const ru: Record<string, string> = {
   'scanning.capturedAlt': 'Захваченное лицо',
 
   // ─── Report Screen ────────────────────────────────────────────────────────
+  'report.aiSummaryTitle': 'AI-резюме о ваших губах',
+  'report.aiSummaryLoading': 'AI бережно готовит резюме о ваших губах…',
   'report.title': 'Анализ губ',
   'report.createdAt': 'Сформирован',
   'report.generalTab': 'Общее',
@@ -406,6 +408,7 @@ const ru: Record<string, string> = {
   'proportion.yourValue': 'Ваше значение',
   'proportion.howToRead': 'Как читать',
   'proportion.whyImportant': 'Почему это важно',
+  'proportion.conclusion': 'Заключение',
 
   // ─── Feature Card ─────────────────────────────────────────────────────────
   'featureCard.leftProfile': 'левый профиль',

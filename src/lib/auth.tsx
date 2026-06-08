@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { supabase } from './supabase'
 import type { User, Session } from '@supabase/supabase-js'
+import { identifyUser, resetAnalytics } from './analytics'
 
 interface AuthContextType {
   user: User | null
@@ -24,11 +25,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [hasAccess, setHasAccess] = useState(false)
 
   async function checkAccess(userId: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('subscription_status')
       .eq('id', userId)
       .maybeSingle()
+
+    if (error) {
+      console.error('[auth] checkAccess failed:', error.message)
+      // Retry once after 1.5s — transient network errors shouldn't lock out paid users
+      await new Promise((r) => setTimeout(r, 1500))
+      const { data: retry } = await supabase
+        .from('profiles')
+        .select('subscription_status')
+        .eq('id', userId)
+        .maybeSingle()
+      setHasAccess(retry?.subscription_status === 'pro')
+      return
+    }
     setHasAccess(data?.subscription_status === 'pro')
   }
 
@@ -41,7 +55,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(({ data: { session } }) => {
         setSession(session)
         setUser(session?.user ?? null)
-        if (session?.user) checkAccess(session.user.id).finally(() => setLoading(false))
+        if (session?.user) {
+          identifyUser(session.user.id, { email: session.user.email })
+          checkAccess(session.user.id).finally(() => setLoading(false))
+        }
         else setLoading(false)
       })
       .catch(() => {
@@ -52,8 +69,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
-      if (session?.user) void checkAccess(session.user.id)
-      else { setHasAccess(false) }
+      if (session?.user) {
+        identifyUser(session.user.id, { email: session.user.email })
+        void checkAccess(session.user.id)
+      }
+      else { setHasAccess(false); resetAnalytics() }
     })
 
     return () => subscription.unsubscribe()
@@ -64,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Create profile row immediately (also covered by DB trigger as fallback)
     if (!error && data.user) {
-      await supabase.from('profiles').upsert(
+      const { error: upsertError } = await supabase.from('profiles').upsert(
         {
           id: data.user.id,
           email,
@@ -74,6 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
         { onConflict: 'id' },
       )
+      if (upsertError) {
+        console.error('[auth] profile upsert failed — user may get free access via DB trigger:', upsertError.message)
+      }
     }
 
     // If session is present right away → email autoconfirm is enabled, user is logged in

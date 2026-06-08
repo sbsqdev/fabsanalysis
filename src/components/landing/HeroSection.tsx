@@ -50,6 +50,14 @@ export default function HeroSection() {
             <span className="font-semibold text-charcoal">{t('hero.price')}</span>
             {' · '}{t('hero.priceLabel')}
           </p>
+          <a
+            href={`https://api.whatsapp.com/send/?phone=77015557893&text=${encodeURIComponent('Добрый день! Хочу узнать подробнее об анализе лица ProFace')}&type=phone_number&app_absent=0`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-sans text-muted hover:text-charcoal transition-colors underline-offset-2 hover:underline"
+          >
+            или сначала поговорить со специалистом →
+          </a>
         </div>
 
         {/* Trust badges */}

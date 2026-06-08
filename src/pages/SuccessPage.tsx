@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { formatPhoneDisplay } from '../lib/phone'
+import { track, EVENTS } from '../lib/analytics'
 
 function randomReceiptId() {
   return Math.floor(600_000_000 + Math.random() * 99_999_999).toString()
@@ -25,8 +26,11 @@ export default function SuccessPage() {
   const displayPhone = rawPhone ? formatPhoneDisplay(rawPhone) : '+7 (___) ___-__-__'
 
   useEffect(() => {
-    const t = setTimeout(() => { void refreshAccess() }, 1500)
-    return () => clearTimeout(t)
+    // Fire payment confirmation event — this is the authoritative "payment done" signal
+    // from the server redirect, distinct from payment_verified which fires on webhook.
+    track(EVENTS.PAYMENT_SUCCESS_PAGE, { amount_kzt: 3000 });
+    const timer = setTimeout(() => { void refreshAccess() }, 1500)
+    return () => clearTimeout(timer)
   }, [refreshAccess])
 
   return (

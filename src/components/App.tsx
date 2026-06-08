@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import type { AppScreen, NormalizedLandmark, AnalysisReport, AngleCapture, FeatureAnalysis, UserProfile } from '../types';
 import { useAuth } from '../lib/auth';
+import { track, EVENTS, SCREEN_NAMES } from '../lib/analytics';
 import { saveAnalysisForUser } from '../lib/analysisStore';
 import { getCurrentLang } from '../lib/language';
 import ru from '../locales/ru';
@@ -53,6 +54,7 @@ export default function App() {
   const [profileCaptures, setProfileCaptures] = useState<AngleCapture[]>([]);
   const [precomputedTransforms, setPrecomputedTransforms] = useState<Partial<Record<string, string>>>({});
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const camera = useCamera();
   const faceMesh = useFaceMesh();
@@ -85,6 +87,21 @@ export default function App() {
     },
     [],
   );
+
+  // Funnel: track every screen transition inside /analysis.
+  // `analysis_screen_viewed` powers the step-by-step funnel in PostHog.
+  // `analysis_started` / `analysis_completed` are kept for backwards compatibility
+  // with existing funnel insights that reference those event names.
+  useEffect(() => {
+    track(EVENTS.ANALYSIS_SCREEN_VIEWED, {
+      screen,
+      screen_name: SCREEN_NAMES[screen] ?? screen,
+      source: inputSource || undefined,
+    });
+    if (screen === 'scanning') track(EVENTS.ANALYSIS_STARTED, { source: inputSource });
+    if (screen === 'report')   track(EVENTS.ANALYSIS_COMPLETED, { source: inputSource });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
 
   const handleStartGuidedCapture = useCallback(() => {
     // Switch to screen immediately so user sees feedback right away.
@@ -426,6 +443,25 @@ export default function App() {
     setScreen('capture');
   }, []);
 
+  /** Compress an image data URL to a 320px JPEG thumbnail. */
+  const compressThumbnail = useCallback(async (dataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 320;
+        const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+        const w = Math.round(img.naturalWidth * scale);
+        const h = Math.round(img.naturalHeight * scale);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => resolve(dataUrl); // fallback: use original
+      img.src = dataUrl;
+    });
+  }, []);
+
   /** Fire-and-forget: save completed analysis via Supabase client. Silently ignored if not authenticated. */
   const saveAnalysis = useCallback(async (
     completedReport: AnalysisReport,
@@ -435,21 +471,26 @@ export default function App() {
       console.info('[Save] Skipped — no authenticated user');
       return;
     }
+    setSaveStatus('saving');
     const t0 = performance.now();
     try {
       console.info(`[Save] Saving analysis for user=${user.id.slice(0, 8)}…`);
+      // Compress thumbnail to 320px JPEG before saving — avoids Supabase payload limit.
+      const compressed = thumbnailUrl ? await compressThumbnail(thumbnailUrl) : null;
       await saveAnalysisForUser({
         userId: user.id,
         report: completedReport,
-        thumbnailUrl,
+        thumbnailUrl: compressed,
       });
       const ms = Math.round(performance.now() - t0);
       console.info(`[Save] OK (${ms}ms)`);
+      setSaveStatus('saved');
     } catch (err) {
       const ms = Math.round(performance.now() - t0);
       console.error(`[Save] Exception (${ms}ms):`, err);
+      setSaveStatus('error');
     }
-  }, [user]);
+  }, [user, compressThumbnail]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -520,6 +561,7 @@ export default function App() {
             aiResult={aiResult}
             aiError={aiError}
             userProfile={userProfile}
+            saveStatus={saveStatus}
             onSurveyComplete={setUserProfile}
             onRetake={handleRetake}
           />

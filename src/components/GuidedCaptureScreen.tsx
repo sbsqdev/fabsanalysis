@@ -93,25 +93,31 @@ export default function GuidedCaptureScreen({
   const [captureHint, setCaptureHint] = useState<string | null>(null);
   const [showCaptureBadge, setShowCaptureBadge] = useState(false);
   const [showQualityChecklist, setShowQualityChecklist] = useState(true);
-  const [showProfileAutoHint, setShowProfileAutoHint] = useState(false);
   const captureBadgeTimerRef = useRef<number | null>(null);
-  const profileAutoHintShownRef = useRef(false);
 
   // ── Auto-capture for profile steps ──
   const { initialize, detect, isReady } = useFaceMesh();
   const [yawProgress, setYawProgress]   = useState(0); // 0–1 how close to profile
   const [holdProgress, setHoldProgress] = useState(0); // 0–1 countdown after target reached
   const [isAutoArmed, setIsAutoArmed] = useState(true);
+
+  // ── Adaptive face guide for front step ──
+  /** Normalized (0-1) face bounds detected from the live video stream. */
+  const [faceGuide, setFaceGuide] = useState<{
+    cx: number; cy: number; rx: number; ry: number;
+  } | null>(null);
+  const frontDetectRafRef = useRef<number>(0);
+  const frontLastDetectRef = useRef<number>(0);
   const rafRef       = useRef<number>(0);
   const holdStartRef = useRef<number | null>(null);
   const autoArmedRef = useRef(true);
   const smoothYawRef = useRef(0);
   const lastDetectRef = useRef<number>(0);
-  const HOLD_MS    = 650;  // shorter hold reduces "stuck near target" feeling
-  const TARGET_YAW = 0.60; // start hold threshold
-  const TARGET_YAW_RELEASE = 0.52; // hysteresis: keep hold despite small jitter
-  const REARM_YAW  = 0.20; // require near-frontal reset before re-arming
-  const THROTTLE   = 100;  // detect at ~10fps
+  const HOLD_MS    = 500;  // shorter hold = faster capture, less "stuck" feeling
+  const TARGET_YAW = 0.52; // lower threshold = easier for users to reach profile
+  const TARGET_YAW_RELEASE = 0.44; // hysteresis
+  const REARM_YAW  = 0.18; // require near-frontal reset before re-arming
+  const THROTTLE   = 80;   // detect at ~12fps for snappier response
 
   const setVideoRefs = useCallback((node: HTMLVideoElement | null) => {
     videoElRef.current = node;
@@ -146,10 +152,6 @@ export default function GuidedCaptureScreen({
       return next;
     });
     triggerCaptureBadge();
-    if (currentStep === 0 && !profileAutoHintShownRef.current) {
-      profileAutoHintShownRef.current = true;
-      setShowProfileAutoHint(true);
-    }
     if (currentStep < STEPS.length - 1) {
       setCurrentStep(currentStep + 1);
     }
@@ -161,6 +163,19 @@ export default function GuidedCaptureScreen({
     const result = captureFrame(false);
     if (!result) {
       setCaptureHint(t('guided.cameraStarting'));
+      // Retry up to 5 times with 250ms delay — handles slow camera start on mobile
+      let retries = 0;
+      const retry = () => {
+        const r = captureFrame(false);
+        if (r) {
+          setCaptureHint(null);
+          applyCapture({ canvas: r.canvas, imageData: r.imageData, angle: step.angle, mirrored: false });
+        } else if (retries < 5) {
+          retries++;
+          window.setTimeout(retry, 250);
+        }
+      };
+      window.setTimeout(retry, 250);
       return;
     }
     setCaptureHint(null);
@@ -172,7 +187,7 @@ export default function GuidedCaptureScreen({
       mirrored: false,
     };
     applyCapture(capture);
-  }, [captureFrame, step.angle, applyCapture]);
+  }, [captureFrame, step.angle, applyCapture, t]);
 
   // Pre-load MediaPipe on mount so it's ready for profile steps
   useEffect(() => { initialize(); }, [initialize]);
@@ -230,13 +245,6 @@ export default function GuidedCaptureScreen({
     if (!isProfileStep) {
       cancelAnimationFrame(rafRef.current);
       setYawProgress(0);
-      setHoldProgress(0);
-      smoothYawRef.current = 0;
-      holdStartRef.current = null;
-      return;
-    }
-    if (showProfileAutoHint) {
-      cancelAnimationFrame(rafRef.current);
       setHoldProgress(0);
       smoothYawRef.current = 0;
       holdStartRef.current = null;
@@ -313,10 +321,10 @@ export default function GuidedCaptureScreen({
       setYawProgress(visualYaw);
 
       const strongCueCount =
-        Number(sideProgress >= 0.30) +
-        Number(ratioProfileProgress >= 0.68) +
-        Number(eyeSkew >= 0.50);
-      const hasProfileCue = strongCueCount >= 2;
+        Number(sideProgress >= 0.25) +
+        Number(ratioProfileProgress >= 0.55) +
+        Number(eyeSkew >= 0.40);
+      const hasProfileCue = strongCueCount >= 1;
       const canContinueHold = holdStartRef.current !== null && visualYaw >= TARGET_YAW_RELEASE;
       const canStartHold = visualYaw >= TARGET_YAW;
 
@@ -348,7 +356,50 @@ export default function GuidedCaptureScreen({
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStep, captures, isReady, captureFrame, applyCapture, showProfileAutoHint]);
+  }, [currentStep, captures, isReady, captureFrame, applyCapture]);
+
+  // ── Adaptive face guide: detect face bounds for front step at ~3fps ──
+  useEffect(() => {
+    if (currentStep !== 0 || captures[0] !== null || !isReady) {
+      setFaceGuide(null);
+      cancelAnimationFrame(frontDetectRafRef.current);
+      return;
+    }
+
+    const FRONT_THROTTLE = 280; // ~3.5fps — low cost, just for guide
+
+    const loop = (ts: number) => {
+      frontDetectRafRef.current = requestAnimationFrame(loop);
+      if (ts - frontLastDetectRef.current < FRONT_THROTTLE) return;
+      frontLastDetectRef.current = ts;
+
+      const videoEl = videoElRef.current;
+      if (!videoEl || videoEl.readyState < 2) return;
+
+      const result = detect(videoEl);
+      const lms = result?.landmarks;
+      if (!lms?.length) { setFaceGuide(null); return; }
+
+      const top  = lms[10];   // forehead
+      const bot  = lms[152];  // chin
+      const jawL = lms[234];  // right jaw (mirrored = left side of screen)
+      const jawR = lms[454];  // left jaw  (mirrored = right side of screen)
+
+      if (!top || !bot || !jawL || !jawR) { setFaceGuide(null); return; }
+
+      // Normalize: video is CSS-mirrored (scaleX(-1)), so we mirror x.
+      const cx = 1 - (jawL.x + jawR.x) / 2;
+      const cy = (top.y + bot.y) / 2;
+      const rx = Math.abs(jawR.x - jawL.x) / 2;
+      const ry = Math.abs(bot.y - top.y) / 2;
+
+      setFaceGuide({ cx, cy, rx, ry });
+    };
+
+    frontDetectRafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(frontDetectRafRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, captures, isReady]);
 
   const handleRetake = useCallback((index: number) => {
     setCurrentStep(index);
@@ -391,7 +442,7 @@ export default function GuidedCaptureScreen({
       </div>
 
       {/* Camera feed */}
-      <div className="relative rounded-2xl overflow-hidden shadow-lg border border-gray-200 w-full max-w-sm" style={{ height: '60vh', maxHeight: '60vh' }}>
+      <div className="relative rounded-2xl overflow-hidden shadow-lg border border-gray-200 w-full max-w-sm camera-viewport" style={{ maxHeight: '60svh' }}>
         <video
           ref={setVideoRefs}
           className="w-full h-full rounded-2xl"
@@ -410,13 +461,14 @@ export default function GuidedCaptureScreen({
         )}
 
         {/* Pose guide overlay */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+        <div className="absolute inset-0 pointer-events-none">
           {!currentCapture && (currentStep === 0 || isAutoArmed) && (
             <PoseGuide
               angle={step.angle}
               yawProgress={yawProgress}
               holdProgress={holdProgress}
               targetYaw={TARGET_YAW}
+              faceGuide={faceGuide}
             />
           )}
         </div>
@@ -580,7 +632,15 @@ export default function GuidedCaptureScreen({
         ))}
       </div>
 
-      {/* Start analysis button removed — use the one inside camera overlay */}
+      {/* Persistent Start Analysis — visible when all 3 captures done */}
+      {allCaptured && (
+        <button
+          onClick={() => onAllCaptured(captures as AngleCapture[])}
+          className="w-full max-w-sm bg-charcoal hover:bg-charcoal/90 active:scale-[0.98] text-white font-semibold py-4 rounded-2xl transition-all shadow-sm mb-2"
+        >
+          {t('guided.startAnalysis')} →
+        </button>
+      )}
 
       {showQualityChecklist && (
         <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] flex items-center justify-center p-4">
@@ -627,30 +687,6 @@ export default function GuidedCaptureScreen({
         </div>
       )}
 
-      {showProfileAutoHint && (
-        <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white border border-gray-100 shadow-2xl p-5 text-center">
-            <h3 className="font-serif text-xl text-charcoal mb-3">
-              {t('guided.profileAutoModalTitle')}
-            </h3>
-
-            <p className="text-sm font-sans text-gray-700 leading-relaxed">
-              {t('guided.profileAutoModalText1')}
-            </p>
-            <p className="text-sm font-sans text-gray-700 leading-relaxed mt-2">
-              {t('guided.profileAutoModalText2')}
-            </p>
-
-            <button
-              type="button"
-              className="w-full h-11 rounded-xl bg-charcoal text-white font-sans text-sm font-semibold hover:opacity-95 transition-opacity mt-5"
-              onClick={() => setShowProfileAutoHint(false)}
-            >
-              {t('guided.qualityModalContinue')}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -662,11 +698,13 @@ function PoseGuide({
   yawProgress,
   holdProgress,
   targetYaw,
+  faceGuide,
 }: {
   angle: CaptureAngle;
   yawProgress: number;
   holdProgress: number;
   targetYaw: number;
+  faceGuide?: { cx: number; cy: number; rx: number; ry: number } | null;
 }) {
   if (angle !== 'front') {
     return (
@@ -679,21 +717,89 @@ function PoseGuide({
     );
   }
 
-  const strokeColor = 'rgba(92, 124, 250, 0.5)';
-  const size = 300;
+  /**
+   * Adaptive front guide.
+   * The SVG covers the full camera container (absolute inset-0, 100%×100%).
+   * viewBox="0 0 1000 1000" — so we map normalized landmark coords × 1000 directly.
+   *
+   * With object-fit:cover, the video fills the container; for a typical portrait
+   * selfie camera the distortion is small, so direct mapping gives good results.
+   */
+  const VB = 1000;  // SVG viewBox units
+
+  // Default guide: vertically centered oval that covers most mobile faces
+  const defaultCx = 500;
+  const defaultCy = 480;
+  const defaultRx = 220;
+  const defaultRy = 300;
+
+  // Detected guide (from landmarks)
+  const detected = faceGuide != null;
+  const rawCx = detected ? faceGuide!.cx * VB : defaultCx;
+  const rawCy = detected ? faceGuide!.cy * VB : defaultCy;
+  // rx/ry: scale face half-widths from normalized 0-1 to VB coords.
+  // rx is relative to frame width, ry to frame height — both map to VB (square viewBox).
+  // Clamp to reasonable range so guide stays usable.
+  const rawRx = detected ? Math.max(140, Math.min(350, faceGuide!.rx * VB)) : defaultRx;
+  const rawRy = detected ? Math.max(180, Math.min(440, faceGuide!.ry * VB)) : defaultRy;
+
+  const strokeColor = detected ? 'rgba(92, 124, 250, 0.65)' : 'rgba(160, 174, 232, 0.45)';
+  const bracketColor = detected ? 'rgba(92, 124, 250, 0.85)' : 'rgba(160, 174, 232, 0.55)';
+  const bracketLen = rawRx * 0.35;  // corner bracket length as fraction of oval width
+
+  // Corner positions
+  const left = rawCx - rawRx;
+  const right = rawCx + rawRx;
+  const top = rawCy - rawRy;
+  const bottom = rawCy + rawRy;
 
   return (
-    <svg width={size} height={size * 1.3} viewBox="0 0 100 130" fill="none" opacity={0.6}>
-      <ellipse cx="50" cy="58" rx="32" ry="42" stroke={strokeColor} strokeWidth="2" strokeDasharray="6 4" />
-      <ellipse cx="36" cy="50" rx="7" ry="3.5" stroke={strokeColor} strokeWidth="1.5" />
-      <ellipse cx="64" cy="50" rx="7" ry="3.5" stroke={strokeColor} strokeWidth="1.5" />
-      <line x1="50" y1="45" x2="50" y2="65" stroke={strokeColor} strokeWidth="1.5" />
-      <path d="M44 65 Q50 70 56 65" stroke={strokeColor} strokeWidth="1.5" fill="none" />
-      <path d="M38 78 Q50 86 62 78" stroke={strokeColor} strokeWidth="1.5" fill="none" />
-      <line x1="50" y1="10" x2="50" y2="20" stroke={strokeColor} strokeWidth="1" />
-      <line x1="50" y1="96" x2="50" y2="106" stroke={strokeColor} strokeWidth="1" />
-      <line x1="12" y1="58" x2="22" y2="58" stroke={strokeColor} strokeWidth="1" />
-      <line x1="78" y1="58" x2="88" y2="58" stroke={strokeColor} strokeWidth="1" />
+    <svg
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', transition: 'all 0.35s ease' }}
+      viewBox={`0 0 ${VB} ${VB}`}
+      preserveAspectRatio="none"
+      fill="none"
+    >
+      {/* Main oval */}
+      <ellipse
+        cx={rawCx} cy={rawCy}
+        rx={rawRx} ry={rawRy}
+        stroke={strokeColor}
+        strokeWidth="8"
+        strokeDasharray="28 16"
+        style={{ transition: 'all 0.4s ease' }}
+      />
+
+      {/* Corner brackets — top-left */}
+      <path
+        d={`M ${left + bracketLen} ${top} H ${left} V ${top + bracketLen}`}
+        stroke={bracketColor} strokeWidth="12" strokeLinecap="round" strokeLinejoin="round"
+      />
+      {/* top-right */}
+      <path
+        d={`M ${right - bracketLen} ${top} H ${right} V ${top + bracketLen}`}
+        stroke={bracketColor} strokeWidth="12" strokeLinecap="round" strokeLinejoin="round"
+      />
+      {/* bottom-left */}
+      <path
+        d={`M ${left + bracketLen} ${bottom} H ${left} V ${bottom - bracketLen}`}
+        stroke={bracketColor} strokeWidth="12" strokeLinecap="round" strokeLinejoin="round"
+      />
+      {/* bottom-right */}
+      <path
+        d={`M ${right - bracketLen} ${bottom} H ${right} V ${bottom - bracketLen}`}
+        stroke={bracketColor} strokeWidth="12" strokeLinecap="round" strokeLinejoin="round"
+      />
+
+      {/* Center crosshair (subtle) */}
+      <line
+        x1={rawCx - 18} y1={rawCy} x2={rawCx + 18} y2={rawCy}
+        stroke={strokeColor} strokeWidth="5" strokeLinecap="round"
+      />
+      <line
+        x1={rawCx} y1={rawCy - 18} x2={rawCx} y2={rawCy + 18}
+        stroke={strokeColor} strokeWidth="5" strokeLinecap="round"
+      />
     </svg>
   );
 }

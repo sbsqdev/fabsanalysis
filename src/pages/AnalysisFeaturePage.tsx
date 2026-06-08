@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { fetchAnalysisById } from '../lib/analysisStore';
+import { track, EVENTS } from '../lib/analytics';
 import type { FeatureAnalysis, StatusLevel } from '../types';
 import { computeProportions } from '../analysis/proportions';
 import { featureLabel, statusLabel } from '../i18n';
-import MeasurementTooltip from '../components/MeasurementTooltip';
 import ProportionBar from '../components/ProportionBar';
+import MeasurementCard from '../components/MeasurementCard';
 import type { StoredAnalysisRecord } from '../lib/analysisStore';
 import { useLanguage } from '../lib/language';
 import { localizeNarrativeText } from '../lib/narrativeLocalization';
@@ -30,6 +31,8 @@ const FEATURE_ICON: Record<string, string> = {
   Ears: '◗',
 };
 
+const WA_URL = `https://api.whatsapp.com/send/?phone=77015557893&text=${encodeURIComponent('Добрый день! Хочу записаться на консультацию в ProFace 💋')}&type=phone_number&app_absent=0`
+
 export default function AnalysisFeaturePage() {
   const { id, featureName } = useParams<{ id: string; featureName: string }>();
   const { t, lang } = useLanguage();
@@ -49,6 +52,12 @@ export default function AnalysisFeaturePage() {
 
   useEffect(() => {
     if (!id) return;
+    if (featureName) {
+      track(EVENTS.FEATURE_DETAIL_VIEWED, {
+        analysis_id: id,
+        feature_name: decodeURIComponent(featureName),
+      });
+    }
     (async () => {
       try {
         const row = await fetchAnalysisById(id);
@@ -60,7 +69,7 @@ export default function AnalysisFeaturePage() {
         setLoading(false);
       }
     })();
-  }, [id, t]);
+  }, [id, featureName, t]);
 
   const decodedFeatureName = featureName ? decodeURIComponent(featureName) : '';
   const feature: FeatureAnalysis | null = useMemo(() => {
@@ -180,9 +189,14 @@ export default function AnalysisFeaturePage() {
         <section className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
           <h2 className="font-serif text-lg text-charcoal mb-3">{t('featureCard.extraMeasurements')}</h2>
           {additionalMeasurements.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {additionalMeasurements.map(([key, value]) => (
-                <MeasurementTooltip key={key} measurementKey={key} value={value} />
+                <MeasurementCard
+                  key={key}
+                  measurementKey={key}
+                  value={value}
+                  status={feature.status}
+                />
               ))}
             </div>
           ) : (
@@ -218,6 +232,30 @@ export default function AnalysisFeaturePage() {
           ) : (
             <p className="text-sm font-sans text-gray-500">{t('feature.noRecommendations')}</p>
           )}
+        </section>
+
+        <section className="rounded-2xl overflow-hidden border border-indigo-100 bg-gradient-to-br from-indigo-50 to-purple-50 p-5">
+          <div className="flex items-start gap-3 mb-4">
+            <span className="text-2xl leading-none mt-0.5">💬</span>
+            <div>
+              <h3 className="font-serif text-lg text-charcoal mb-1">Разберитесь в результатах с экспертом</h3>
+              <p className="text-sm text-gray-500 leading-snug">
+                Специалист ProFace расшифрует все показатели и составит персональный план коррекции именно под ваши параметры.
+              </p>
+            </div>
+          </div>
+          <a
+            href={WA_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#22c55e] active:scale-[0.98] text-white font-semibold py-3 rounded-xl transition-all text-sm"
+          >
+            <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current shrink-0">
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+              <path d="M12 0C5.373 0 0 5.373 0 12c0 2.089.537 4.05 1.476 5.757L.057 23.882a.5.5 0 0 0 .61.61l6.249-1.418A11.944 11.944 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.647-.523-5.148-1.43l-.369-.217-3.818.867.882-3.703-.231-.378A9.96 9.96 0 0 1 2 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+            </svg>
+            Записаться в WhatsApp
+          </a>
         </section>
 
       </div>

@@ -5,6 +5,7 @@ import { useLanguage } from '../lib/language';
 import { deleteAnalysisById, fetchAnalysesForUser } from '../lib/analysisStore';
 import { computeOverallScore } from '../analysis/scoring';
 import type { StoredAnalysisRecord } from '../lib/analysisStore';
+import { track, EVENTS } from '../lib/analytics';
 
 function scoreColor(score: number) {
   if (score >= 80) return 'text-emerald-600';
@@ -22,15 +23,18 @@ export default function DashboardPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Track dashboard view after analyses load so we can include the count.
   useEffect(() => {
     if (!user) return;
     (async () => {
       try {
         const data = await fetchAnalysesForUser(user.id);
         setAnalyses(data);
+        track(EVENTS.DASHBOARD_VIEWED, { analyses_count: data.length });
       } catch (error) {
         console.error('[Dashboard] failed to load analyses:', error);
         setAnalyses([]);
+        track(EVENTS.DASHBOARD_VIEWED, { analyses_count: 0 });
       } finally {
         setLoadingAnalyses(false);
       }
@@ -77,23 +81,36 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-cream">
       {/* Header */}
-      <div className="bg-white border-b border-cream-dark px-6 md:px-12 h-16 flex items-center justify-between">
-        <Link to="/" className="font-sans text-xl font-bold text-charcoal">
-          FABS <span className="text-gold font-normal">Facial Analysis</span>
+      <div className="bg-white border-b border-cream-dark px-5 md:px-10 h-16 flex items-center justify-between gap-3">
+        <Link to="/" className="flex items-center gap-1.5 shrink-0">
+          <span className="font-serif text-lg font-semibold text-charcoal">FABS</span>
+          <span className="text-gray-300 text-sm select-none">×</span>
+          <span className="font-serif text-lg font-semibold text-rose-500">ProFace</span>
         </Link>
-        <div className="flex items-center gap-4">
+
+        <div className="flex items-center gap-2 sm:gap-3">
+          {hasAccess && (
+            <Link
+              to="/analysis"
+              className="hidden sm:flex items-center gap-1.5 bg-charcoal hover:bg-charcoal/90 active:scale-95 text-white text-xs font-semibold px-3.5 py-2 rounded-full transition-all"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              Новый анализ
+            </Link>
+          )}
           <button
             onClick={() => setLang(lang === 'ru' ? 'en' : 'ru')}
-            className="text-xs font-sans font-medium text-muted hover:text-charcoal transition-colors border border-cream-dark rounded-full px-2.5 py-1"
+            className="text-xs font-medium text-muted hover:text-charcoal transition-colors border border-cream-dark rounded-full px-2.5 py-1"
             aria-label={lang === 'ru' ? t('header.switchToEn') : t('header.switchToRu')}
-            title={lang === 'ru' ? t('header.switchToEn') : t('header.switchToRu')}
           >
             {lang === 'ru' ? 'EN' : 'RU'}
           </button>
-          <span className="text-sm font-sans text-muted hidden sm:block">{user?.email}</span>
+          <span className="text-xs text-muted hidden md:block truncate max-w-[140px]">{user?.email}</span>
           <button
             onClick={handleSignOut}
-            className="text-sm font-sans text-muted hover:text-charcoal transition-colors"
+            className="text-xs text-muted hover:text-charcoal transition-colors"
           >
             {t('header.signOut')}
           </button>

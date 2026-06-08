@@ -74,17 +74,14 @@ export function generateReport(input: AnalysisInput): AnalysisReport {
   const pLeftLm = profileLeft?.landmarks ?? null;
   const pRightLm = profileRight?.landmarks ?? null;
 
+  // ── LIPS-ONLY MODE ──────────────────────────────────────────────────────
+  // This product analyses the lips only. The other facial analysers remain in
+  // the codebase (src/analysis/features.ts) and can be re-enabled here, but the
+  // report, PDF and AI summary intentionally operate on a single feature.
+  // To restore full-face analysis, swap `features` back to the 10-analyser list.
+  void cheekSkinMetrics; // computed above; unused in lips-only mode
   const features = [
-    F.analyzeEyebrows(landmarks, qualityFactor, hasProfiles, frontAspect),
-    F.analyzeEyes(landmarks, qualityFactor, hasProfiles, frontAspect),
-    F.analyzeNose(landmarks, qualityFactor, hasProfiles, pLeftLm, pRightLm, frontAspect, profileAspect),
-    F.analyzeCheeks(landmarks, cheekSkinMetrics, qualityFactor, hasProfiles, pLeftLm, pRightLm, frontAspect, profileAspect),
-    F.analyzeJaw(landmarks, qualityFactor, hasProfiles, pLeftLm, pRightLm, frontAspect, profileAspect),
     F.analyzeLips(landmarks, qualityFactor, hasProfiles, pLeftLm, pRightLm, frontAspect, profileAspect),
-    F.analyzeChin(landmarks, qualityFactor, hasProfiles, pLeftLm, pRightLm, frontAspect, profileAspect),
-    F.analyzeSkin(landmarks, imageData, imageWidth, imageHeight, qualityFactor, hasProfiles),
-    F.analyzeNeck(landmarks, hasProfiles, qualityFactor, pLeftLm, pRightLm, profileAspect),
-    F.analyzeEars(landmarks, hasProfiles, qualityFactor),
   ];
 
   const processingTime = Date.now() - startTime;
