@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { formatPhoneDisplay } from '../lib/phone'
@@ -17,21 +17,38 @@ function nowKZ() {
 }
 
 export default function SuccessPage() {
-  const { refreshAccess, user } = useAuth()
+  const { refreshAccess, user, hasAccess } = useAuth()
   const receiptId = useMemo(() => randomReceiptId(), [])
   const date = useMemo(() => nowKZ(), [])
 
-  // Get phone from user metadata
-  const rawPhone: string = (user?.user_metadata?.phone as string | undefined) ?? ''
-  const displayPhone = rawPhone ? formatPhoneDisplay(rawPhone) : '+7 (___) ___-__-__'
+  // Keep a stable ref to refreshAccess so the polling loop doesn't restart
+  // every render (refreshAccess is recreated on each AuthProvider render).
+  const refreshRef = useRef(refreshAccess)
+  useEffect(() => { refreshRef.current = refreshAccess }, [refreshAccess])
 
   useEffect(() => {
-    // Fire payment confirmation event — this is the authoritative "payment done" signal
-    // from the server redirect, distinct from payment_verified which fires on webhook.
-    track(EVENTS.PAYMENT_SUCCESS_PAGE, { amount_kzt: 3000 });
-    const timer = setTimeout(() => { void refreshAccess() }, 1500)
-    return () => clearTimeout(timer)
-  }, [refreshAccess])
+    track(EVENTS.PAYMENT_SUCCESS_PAGE, { amount_kzt: 3000 })
+
+    // Poll the DB until the webhook has granted 'pro' status.
+    // The webhook may arrive a few seconds after the redirect.
+    let cancelled = false
+
+    const poll = async (attempt: number) => {
+      if (cancelled) return
+      await refreshRef.current()
+      // Keep polling up to 12 attempts (≈ 35 s total) with 3 s gaps
+      if (!cancelled && attempt < 12) {
+        setTimeout(() => { void poll(attempt + 1) }, 3000)
+      }
+    }
+
+    // First check after 1.5 s, then every 3 s
+    const t = setTimeout(() => { void poll(0) }, 1500)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, []) // empty deps — run once on mount; refreshRef stays current
+
+  const rawPhone: string = (user?.user_metadata?.phone as string | undefined) ?? ''
+  const displayPhone = rawPhone ? formatPhoneDisplay(rawPhone) : '+7 (___) ___-__-__'
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] flex flex-col items-center justify-center px-4 py-10">
@@ -41,7 +58,6 @@ export default function SuccessPage() {
 
         {/* Header */}
         <div className="bg-white px-6 pt-7 pb-4 text-center">
-          {/* Kaspi-style icon */}
           <div className="w-14 h-14 rounded-full bg-[#ee5a24] flex items-center justify-center mx-auto mb-3 shadow-md">
             <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -92,12 +108,24 @@ export default function SuccessPage() {
 
         {/* CTA */}
         <div className="px-6 py-5 bg-gray-50 text-center">
-          <Link
-            to="/analysis"
-            className="block w-full bg-rose-500 hover:bg-rose-400 text-white font-semibold py-3.5 rounded-xl transition-colors text-sm shadow-sm"
-          >
-            Начать анализ губ →
-          </Link>
+          {hasAccess ? (
+            <Link
+              to="/analysis"
+              className="block w-full bg-rose-500 hover:bg-rose-400 text-white font-semibold py-3.5 rounded-xl transition-colors text-sm shadow-sm"
+            >
+              Начать анализ губ →
+            </Link>
+          ) : (
+            <div className="block w-full bg-rose-500/70 text-white font-semibold py-3.5 rounded-xl text-sm shadow-sm">
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Активируем доступ...
+              </span>
+            </div>
+          )}
           <Link
             to="/dashboard"
             className="block mt-2.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"

@@ -25,9 +25,9 @@ function softenOverallScore(raw: number): number {
   const pivot = 78;
   const lifted = raw < pivot
     ? raw + (pivot - raw) * 0.35
-    : raw + (100 - raw) * 0.05;
+    : raw + (85 - raw) * 0.05;
 
-  return Math.min(100, Math.round(lifted));
+  return Math.min(85, Math.round(lifted));
 }
 
 /**

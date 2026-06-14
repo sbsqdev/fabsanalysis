@@ -367,15 +367,35 @@ export function noseSymmetry(lm: Lm, imageAspectRatio: number = 1): number {
 
 // ─── Lip Metrics ────────────────────────────────────────────────────────────
 
-/** Upper to lower lip height ratio */
+/** Upper to lower lip height ratio — uses full 11-point outer contours for robustness */
 export function lipRatio(lm: Lm, imageAspectRatio: number = 1): number {
+  const stomionY = (alignedY(lm, L.LIPS.upperCenter, imageAspectRatio) + alignedY(lm, L.LIPS.lowerCenter, imageAspectRatio)) / 2;
+
+  // Use full outer contours (excluding shared corners at index 0 and 10) to find
+  // the highest point of the upper lip and the lowest point of the lower lip.
+  const upperMidYs = L.LIPS_OUTER_UPPER.slice(1, -1)
+    .map((i) => alignedY(lm, i, imageAspectRatio))
+    .filter((y) => Number.isFinite(y));
+  const lowerMidYs = L.LIPS_OUTER_LOWER.slice(1, -1)
+    .map((i) => alignedY(lm, i, imageAspectRatio))
+    .filter((y) => Number.isFinite(y));
+
+  if (upperMidYs.length > 0 && lowerMidYs.length > 0) {
+    // In image coords Y increases downward: upper lip peak has smallest Y, lower lip trough has largest Y
+    const upperLipTopY = Math.min(...upperMidYs);
+    const lowerLipBottomY = Math.max(...lowerMidYs);
+    const upperH = Math.abs(stomionY - upperLipTopY);
+    const lowerH = Math.abs(lowerLipBottomY - stomionY);
+    if (lowerH > 0) return upperH / lowerH;
+  }
+
+  // Fallback to 3-point averages when contour points are missing
   const upperTopY = L.LIPS.upperTop.map((i) => alignedY(lm, i, imageAspectRatio)).reduce((a, b) => a + b, 0) / L.LIPS.upperTop.length;
   const upperBottomY = L.LIPS.upperBottom.map((i) => alignedY(lm, i, imageAspectRatio)).reduce((a, b) => a + b, 0) / L.LIPS.upperBottom.length;
   const lowerTopY = L.LIPS.lowerTop.map((i) => alignedY(lm, i, imageAspectRatio)).reduce((a, b) => a + b, 0) / L.LIPS.lowerTop.length;
   const lowerBottomY = L.LIPS.lowerBottom.map((i) => alignedY(lm, i, imageAspectRatio)).reduce((a, b) => a + b, 0) / L.LIPS.lowerBottom.length;
   const upperH = Math.abs(upperBottomY - upperTopY);
   const lowerHPrimary = Math.abs(lowerBottomY - lowerTopY);
-  const stomionY = (alignedY(lm, L.LIPS.upperCenter, imageAspectRatio) + alignedY(lm, L.LIPS.lowerCenter, imageAspectRatio)) / 2;
   const lowerHFallback = Math.abs(alignedY(lm, L.LIPS.lowerOuter, imageAspectRatio) - stomionY);
   const lowerH = Math.max(lowerHPrimary, lowerHFallback * 0.9);
   if (lowerH === 0) return 0;
@@ -401,14 +421,37 @@ export function mouthCornerTilt(lm: Lm, imageAspectRatio: number = 1): number {
   return Math.atan2(imageLeft.y - imageRight.y, width) * (180 / Math.PI);
 }
 
-/** Lip symmetry — comparing corner distances from center */
+/**
+ * Lip symmetry — multi-point comparison between left and right halves.
+ * Checks corners, cupid's bow peaks (37/267), and lower lip bottom edges (84/314).
+ * Returns 1.0 for perfect symmetry, lower values indicate asymmetry.
+ */
 export function lipSymmetry(lm: Lm, imageAspectRatio: number = 1): number {
   const center = midpoint(lm[L.LIPS.upperCenter], lm[L.LIPS.lowerCenter]);
-  const rDist = dist(lm[L.LIPS.rightCorner], center, imageAspectRatio);
-  const lDist = dist(lm[L.LIPS.leftCorner], center, imageAspectRatio);
-  const max = Math.max(rDist, lDist);
-  if (max === 0) return 1;
-  return 1 - Math.abs(rDist - lDist) / max;
+
+  function symScore(rIdx: number, lIdx: number): number | null {
+    const rPt = lm[rIdx];
+    const lPt = lm[lIdx];
+    if (!rPt || !lPt) return null;
+    const r = dist(rPt, center, imageAspectRatio);
+    const l = dist(lPt, center, imageAspectRatio);
+    const max = Math.max(r, l);
+    return max > 0 ? 1 - Math.abs(r - l) / max : 1;
+  }
+
+  const scores: number[] = [];
+  // Corners
+  const cornerScore = symScore(L.LIPS.rightCorner, L.LIPS.leftCorner);
+  if (cornerScore !== null) scores.push(cornerScore);
+  // Cupid's bow peaks (right peak 37, left peak 267) — weight 1.5× (most visible asymmetry)
+  const peakScore = symScore(37, 267);
+  if (peakScore !== null) { scores.push(peakScore); scores.push(peakScore); }
+  // Lower lip bottom edges (84 right, 314 left)
+  const lowerEdgeScore = symScore(84, 314);
+  if (lowerEdgeScore !== null) scores.push(lowerEdgeScore);
+
+  if (scores.length === 0) return 1;
+  return scores.reduce((a, b) => a + b, 0) / scores.length;
 }
 
 // ─── Jaw / Chin Metrics ─────────────────────────────────────────────────────
